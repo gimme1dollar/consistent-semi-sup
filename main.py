@@ -118,10 +118,10 @@ class TrainManager(object):
                         correct_1 += correct_k.item()
                     elif k == 3:
                         correct_k = correct[:3].reshape(-1).float().sum(0, keepdim=True)
-                        correct_k += correct_k.item()
+                        correct_3 += correct_k.item()
                     elif k == 5:
                         correct_k = correct[:5].reshape(-1).float().sum(0, keepdim=True)
-                        correct_k += correct_k.item()
+                        correct_5 += correct_k.item()
                     else:
                         raise NotImplementedError("Invalid top-k num")
 
@@ -163,7 +163,7 @@ class TrainManager(object):
                     visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/input_image")
                     
             top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
-            wandb.log({"valiation/top1_acc" : top1_acc, "valiation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
+            wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
 
             self.adjust_learning_rate(epoch)
             self.save_ckpt(epoch)
