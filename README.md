@@ -9,16 +9,17 @@ After making your own private python environment using whatever, Please install 
 We use DL20, which have 20 classes.
 You have to make following dataset hierarchy:
 
-dataset - DL20 - train - 0 - many images
-                       - 1
-                       - ...
-               - valid - 0 - many images
-                       - 1
-                       - ...
-        
-               - test - many images
-               
-                     
+dataset / DL20 / [train, valid, test]
+
+---
+
+train - [0, 1, 2, ... , 20]
+
+valid - [0, 1, 2, ..., 20]
+
+test - only have images without labels
+
+
 
 ## Wandb
 You have to install wandb; ML record & visualization tool.
