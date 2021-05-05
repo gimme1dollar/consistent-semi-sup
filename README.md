@@ -6,8 +6,8 @@ First of all, I highly recommend you to use "virtualenv" or "anaconda" for manag
 After making your own private python environment using whatever, Please install needed python packages by following : pip install -r requirements.txt
 
 ## Wandb
-You have to install wandb; ML record & visualization tool
-Please be familiar with wandb
+You have to install wandb; ML record & visualization tool.
+
 how to start/use wandb : https://greeksharifa.github.io/references/2020/06/10/wandb-usage/
 
 ## For training
