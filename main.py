@@ -209,7 +209,7 @@ def main(args):
     orig_cwd = os.getcwd()
     
     # bring effi model from this : https://github.com/lukemelas/EfficientNet-PyTorch
-    model = EfficientNet.from_pretrained('efficientnet-b4')
+    model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20)
     wandb.watch(model)
 
     additional_cfg = {'device': None}

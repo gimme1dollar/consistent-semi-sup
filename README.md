@@ -13,9 +13,9 @@ dataset / DL20 / [train, valid, test]
 
 ---
 
-train - [0, 1, 2, ... , 20]
+train - [0, 1, 2, ... , 19]
 
-valid - [0, 1, 2, ..., 20]
+valid - [0, 1, 2, ..., 19]
 
 test - only have images without labels
 
