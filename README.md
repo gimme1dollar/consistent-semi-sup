@@ -1,4 +1,4 @@
-# CSED538 Group12 Project
+# POSTECH CSED538 Group12 Project
 
 ## Preparation
 First of all, I highly recommend you to use "virtualenv" or "anaconda" for managing python libraries.
