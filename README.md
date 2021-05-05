@@ -5,6 +5,21 @@ First of all, I highly recommend you to use "virtualenv" or "anaconda" for manag
 
 After making your own private python environment using whatever, Please install needed python packages by following : pip install -r requirements.txt
 
+## Dataset
+We use DL20, which have 20 classes.
+You have to make following dataset hierarchy:
+
+dataset - DL20 - train - 0 - many images
+                       - 1
+                       - ...
+               - valid - 0 - many images
+                       - 1
+                       - ...
+        
+               - test - many images
+               
+                     
+
 ## Wandb
 You have to install wandb; ML record & visualization tool.
 
