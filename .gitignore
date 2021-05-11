@@ -1,3 +1,4 @@
-dataset/DL20
+data/DL20
 wandb/
 checkpoints/
+.DS_Store
