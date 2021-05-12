@@ -1,14 +1,14 @@
 # POSTECH CSED538 Group12 Project
 
 ## Preparation
-First of all, I highly recommend you to use "virtualenv" or "anaconda" for managing python libraries.
+First of all, I highly recommend you to use "virtualenv" or "anaconda" for managing python libraries in Ubuntu/Mac.
 
 After making your own private python environment using whatever, Please install needed python packages by following : pip install -r requirements.txt
 
 You have to install proper pytorch with your own gpu version; 
 
 ## Dataset
-### We use DL20, which have 20 classes.
+### We use DL20, which has 20 classes.
 You have to make following dataset hierarchy:
 
 ---
@@ -26,11 +26,13 @@ test - only have images without labels
 ---
 #### ImageNet Dataset
 
-You have to download ImageNet via kaggle API.
+You have to download ImageNet Dataset via kaggle API.
 
 reference site : https://teddylee777.github.io/kaggle/Kaggle-API-%EC%82%AC%EC%9A%A9%EB%B2%95
 
 After downloading your kaggle.json, just type ```kaggle competitions download -c imagenet-object-localization-challenge```
+
+It is recommeded to use 7zip for extracting .tar.gz imagenet file.
 
 You have to make following dataset hierarchy:
 
@@ -49,7 +51,7 @@ test - [...]
 ---
 
 ## Wandb
-You have to install wandb; ML record & visualization tool.
+You have to install wandb; ML recording & visualization tool.
 
 how to start/use wandb : https://greeksharifa.github.io/references/2020/06/10/wandb-usage/
 
