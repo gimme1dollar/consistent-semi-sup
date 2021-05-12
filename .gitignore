@@ -1,4 +1,6 @@
-data/DL20
+.vscode/*
+dataset/DL20
+dataset/ImageNet
 wandb/
 checkpoints/
 .DS_Store
