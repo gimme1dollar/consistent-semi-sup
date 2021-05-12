@@ -5,9 +5,13 @@ First of all, I highly recommend you to use "virtualenv" or "anaconda" for manag
 
 After making your own private python environment using whatever, Please install needed python packages by following : pip install -r requirements.txt
 
+You have to install proper pytorch with your own gpu version; 
+
 ## Dataset
-We use DL20, which have 20 classes.
+### We use DL20, which have 20 classes.
 You have to make following dataset hierarchy:
+
+---
 
 dataset / DL20 / [train, valid, test]
 
@@ -19,7 +23,30 @@ valid - [0, 1, 2, ..., 19]
 
 test - only have images without labels
 
+---
+#### ImageNet Dataset
 
+You have to download ImageNet via kaggle API.
+
+reference site : https://teddylee777.github.io/kaggle/Kaggle-API-%EC%82%AC%EC%9A%A9%EB%B2%95
+
+After downloading your kaggle.json, just type ```kaggle competitions download -c imagenet-object-localization-challenge```
+
+You have to make following dataset hierarchy:
+
+---
+
+dataset / ImageNet / [Annotations, Data, ImageSets]
+
+---
+
+Data - [train, test, val]
+
+train - [n01440764, ....]
+val - [...]
+test - [...]
+
+---
 
 ## Wandb
 You have to install wandb; ML record & visualization tool.
@@ -32,7 +59,7 @@ python3 main.py
 ## Basic informations about framework
 ### backbone : efficientnet-b04 
 
-## Contributors
+## Contributorse
 감제원 20202637    
 권동현 20212423     
 김민석 20182698    

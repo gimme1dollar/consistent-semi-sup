@@ -12,6 +12,8 @@ import wandb, argparse
 from efficientnet_pytorch.model import EfficientNet
 from utils.losses import CEloss, total_loss
 from utils.visualize import *
+from itertools import cycle
+
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 torch.backends.cudnn.benchmark = True
@@ -20,8 +22,9 @@ imagenet_mean = [0.485, 0.456, 0.406]
 imagenet_std = [0.229, 0.224, 0.225]
 
 data_path = pjn(os.getcwd(), "dataset", "DL20")
+imagenet_data_path = pjn(os.getcwd(), "dataset", "ImageNet", "ILSVRC", "Data", "CLS-LOC")
 
-def init(train_batch, val_batch, test_batch):
+def init(train_batch, val_batch, test_batch, imagenet_batch):
 
     # default augmentation functions : http://incredible.ai/pytorch/2020/04/25/Pytorch-Image-Augmentation/ 
     # for more augmentation functions : https://github.com/aleju/imgaug
@@ -42,7 +45,13 @@ def init(train_batch, val_batch, test_batch):
     ])
 
     transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
+    ])
 
+    transform_imagenet = transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(p=0.5),
         transforms.ToTensor(),
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
     ])
@@ -50,23 +59,29 @@ def init(train_batch, val_batch, test_batch):
     train_dataset = LoadDataset(data_path = data_path, transform=transform_train , mode='train')
     val_dataset = LoadDataset(data_path = data_path, transform=transform_val , mode='valid')
     test_dataset = LoadDataset(data_path = data_path, transform=transform_test , mode='test')
-                            
+    imagenet_dataset = LoadDataset(data_path = imagenet_data_path, transform=transform_imagenet, mode='train')
+
     train_loader = torch.utils.data.DataLoader(
             dataset=train_dataset, batch_size=train_batch,
             num_workers=4, shuffle=True, pin_memory=True
     )
 
     val_loader = torch.utils.data.DataLoader(
-            dataset=val_dataset, batch_size=train_batch,
+            dataset=val_dataset, batch_size=val_batch,
             num_workers=4, shuffle=False, pin_memory=True
     )
 
     test_loader = torch.utils.data.DataLoader(
-            dataset=test_dataset, batch_size=train_batch,
+            dataset=test_dataset, batch_size=test_batch,
             num_workers=4, shuffle=False, pin_memory=True
     )
 
-    return train_loader, val_loader, test_loader
+    imagenet_loader = torch.utils.data.DataLoader(
+            dataset=imagenet_dataset, batch_size=imagenet_batch,
+            num_workers=4, shuffle=True, pin_memory=True
+    )
+
+    return train_loader, val_loader, test_loader, imagenet_loader
     
 class TrainManager(object):
     def __init__(
@@ -78,6 +93,7 @@ class TrainManager(object):
             train_loader,
             val_loader,
             test_loader,
+            imagenet_loader,
             scaler=None,
             num_classes=None,
             ):
@@ -89,6 +105,7 @@ class TrainManager(object):
         self.tbx_wrtr_dir = additional_cfg.get('tbx_wrtr_dir')
         self.scaler = scaler
         self.val_loader = val_loader
+        self.imagenet_loader = imagenet_loader
         self.num_classes = num_classes
 
     def validate(self, loader, device, topk=(1,3,5)):
@@ -128,13 +145,16 @@ class TrainManager(object):
 
         return (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
 
-                
+
     def train(self):
         start = time.time()
         epoch = 0
-        print("  training data(considered batch size): ", len(self.train_loader))
+        iter_per_epoch = len(self.train_loader) * 4
+        print("  iteration per epoch(considered batch size): ", iter_per_epoch)
         print("  Progress bar for training epochs:")
         end_epoch = self.args.start_epoch + self.args.num_epochs
+
+        dataloader = iter(zip(cycle(self.train_loader), cycle(self.imagenet_loader)))
 
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
             self.model.train()
@@ -142,34 +162,45 @@ class TrainManager(object):
                 avg_lr = param_group['lr']
                 wandb.log({str(idx)+"_lr": math.log10(avg_lr), 'epoch': epoch})
 
-            for t_idx, (image, target) in tqdm(enumerate(self.train_loader), desc='batch_iter', leave=False):
+            for t_idx in tqdm(range(0, iter_per_epoch), desc='batch_iter', leave=False):
+                
+                sup, semisup = next(dataloader)
+
+                image, target = sup
+                image_ul, target_ul = semisup
+                
+                image = image.to(self.add_cfg['device']) # DL20
+                target = target.to(self.add_cfg['device'])
+
+                image_ul = image_ul.to(self.add_cfg['device']) # imagenet data
+                target_ul = target_ul.to(self.add_cfg['device']) # do not use this label in training.
+
+
                 self.optimizer.zero_grad()
                 losses_list = []
-                image = image.to(self.add_cfg['device'])
-                target = target.to(self.add_cfg['device'])
                 with torch.cuda.amp.autocast():
                     outputs = self.model(image)
                     celoss = CEloss(outputs, target)
-                    losses_list.append(celoss)
-
+                    losses_list.append(celoss)   
                     wandb.log({"training/celoss" : celoss})
 
                 t_loss = total_loss(losses_list)
+
                 self.scaler.scale(t_loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
                 if t_idx % 50 == 0:
                     visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/input_image")
+                    visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/imagenet")
                     
+
             top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
             wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
-
             self.adjust_learning_rate(epoch)
             self.save_ckpt(epoch)
             
-        end = time.time()
-               
+        end = time.time()   
         print("Total training time : ", str(datetime.timedelta(seconds=(int(end)-int(start)))))
         print("Finish.")
 
@@ -240,8 +271,8 @@ def main(args):
     now = datetime.datetime.now()
     additional_cfg['tbx_wrtr_dir'] = os.getcwd() + "/checkpoints/" + str(now.strftime('%Y-%m-%d-%H-%M-%S'))
 
-    train_loader, val_loader, test_loader = init(
-        args.batch_size_train, args.batch_size_val, args.batch_size_test
+    train_loader, val_loader, test_loader, imagenet_loader = init(
+        args.batch_size_train, args.batch_size_val, args.batch_size_test, args.batch_size_imagenet
     )
 
     trainer = TrainManager(
@@ -252,6 +283,7 @@ def main(args):
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=test_loader,
+        imagenet_loader=imagenet_loader,
         scaler=scaler,
         num_classes=20
     )
@@ -271,13 +303,15 @@ if __name__ == "__main__":
                         help='Batch size for val data (default: 16)')
     parser.add_argument('--batch-size-test', type=int, default=16,
                         help='Batch size for test data (default: 16)')
+    parser.add_argument('--batch-size-imagenet', type=int, default=16,
+                        help='Batch size for test data (default: 128)')
 
-    parser.add_argument('--save-ckpt', type=int, default=1,
+    parser.add_argument('--save-ckpt', type=int, default=10,
                         help='number of epoch save current weight? (default: 5)')
 
     parser.add_argument('--start-epoch', type=int, default=0,
                         help='start epoch (default: 0)')
-    parser.add_argument('--num-epochs', type=int, default=30,
+    parser.add_argument('--num-epochs', type=int, default=100,
                         help='end epoch (default: 30)')
 
     parser.add_argument('--lr', type=float, default=1e-3,

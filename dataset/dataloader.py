@@ -40,4 +40,3 @@ class LoadDataset(Dataset):
             img, label = self.data[index]
             img, label = self.transform(img), int(label)
             return img, label
-
