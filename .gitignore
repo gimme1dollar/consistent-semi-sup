@@ -4,3 +4,6 @@ dataset/ImageNet
 wandb/
 checkpoints/
 .DS_Store
+venv/
+model/
+.idea/
