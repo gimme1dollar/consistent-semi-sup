@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.multiprocessing
 from torchvision import transforms, utils
-from dataset.dataloader import LoadDataset
+from dataset.dataloader import LoadDataset, IMDataset
 from tqdm import tqdm, tqdm_notebook
 from os.path import join as pjn
 import os.path, os, datetime, math, random, time
@@ -59,7 +59,7 @@ def init(train_batch, val_batch, test_batch, imagenet_batch):
     train_dataset = LoadDataset(data_path = data_path, transform=transform_train , mode='train')
     val_dataset = LoadDataset(data_path = data_path, transform=transform_val , mode='valid')
     test_dataset = LoadDataset(data_path = data_path, transform=transform_test , mode='test')
-    imagenet_dataset = LoadDataset(data_path = imagenet_data_path, transform=transform_imagenet, mode='train')
+    imagenet_dataset = IMDataset(data_path = imagenet_data_path, transform=transform_imagenet)
 
     train_loader = torch.utils.data.DataLoader(
             dataset=train_dataset, batch_size=train_batch,
