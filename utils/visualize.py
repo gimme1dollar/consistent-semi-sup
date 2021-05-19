@@ -7,6 +7,9 @@ from PIL import Image
 import torch.nn.functional as F
 import wandb
 
+imagenet_mean = [0.485, 0.456, 0.406]
+imagenet_std = [0.229, 0.224, 0.225]
+
 def renormalize_float(vector, range_t : tuple):
 
     row = torch.Tensor(vector)
@@ -22,7 +25,7 @@ def un_normalize(img, mean, std):
         t.mul_(s).add_(m)
     return img
 
-def visualize_rescale_image(mean, std, image, tag): # vis image itself with mean train
+def visualize_rescale_image(image, tag, mean = imagenet_mean, std = imagenet_std): # vis image itself with mean train
     # features : B x C x H x W
     origin_image = image
     for batch_idx in range(image.shape[0]):
@@ -34,5 +37,5 @@ def visualize_rescale_image(mean, std, image, tag): # vis image itself with mean
         original_image = (255*(X - np.min(X))/np.ptp(X)).astype(np.uint8)
 
         #print("original image shape : ", original_image.shape)
-        wandb.log({str(tag)+"_"+str(batch_idx) : [wandb.Image(np.transpose(original_image, (1,2,0)))]})
+        wandb.log({str(tag)+"_"+str(batch_idx) : [wandb.Image(np.transpose(original_image, (1,2,0)))]}, commit=False)
 

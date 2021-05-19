@@ -214,6 +214,18 @@ class EfficientNet(nn.Module):
         if self._global_params.include_top:
             self._dropout = nn.Dropout(self._global_params.dropout_rate)
             self._fc = nn.Linear(out_channels, self._global_params.num_classes)
+        
+        self.classifier = nn.Sequential(
+            nn.Conv2d(1792, 1792, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv2d(1792, 20, kernel_size=1)
+        )
+
+        self.projector = nn.Sequential(
+            nn.Conv2d(1792, 1792, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv2d(1792, 512, kernel_size=1)
+        )
 
         # set activation to memory efficient swish by default
         self._swish = MemoryEfficientSwish()
@@ -312,13 +324,17 @@ class EfficientNet(nn.Module):
         """
         # Convolution layers
         x = self.extract_features(inputs)
+        proj = self.projector(x) # b x 512 x 2 x 2
+        x = nn.MaxPool2d(2,2)(x)
         # Pooling and final linear layer
-        x = self._avg_pooling(x)
-        if self._global_params.include_top:
-            x = x.flatten(start_dim=1)
-            x = self._dropout(x)
-            x = self._fc(x)
-        return x
+        # x = self._avg_pooling(x)
+        # if self._global_params.include_top:
+        #     x = x.flatten(start_dim=1)
+        #     x = self._dropout(x)
+        #     x = self._fc(x)
+        cls = self.classifier(x) # b x 20 x 1 x 1
+        
+        return cls.squeeze(), proj.flatten(1) 
 
     @classmethod
     def from_name(cls, model_name, in_channels=3, **override_params):

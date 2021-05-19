@@ -1,5 +1,6 @@
+from efficientnet_pytorch.model import EfficientNet
 from torch.utils.data import Dataset, DataLoader
-import torch
+import torch, torchvision
 import torch.nn as nn
 import torch.multiprocessing
 from torchvision import transforms, utils
@@ -9,11 +10,14 @@ from os.path import join as pjn
 import os.path, os, datetime, math, random, time
 import numpy as np
 import wandb, argparse
-from efficientnet_pytorch.model import EfficientNet
-from utils.losses import CEloss, total_loss
-from utils.visualize import *
+from combine import vgg16_cnn
+from utils.losses import *
 from itertools import cycle
+from adabound import AdaBound
+import warnings
 
+torch.multiprocessing.set_sharing_strategy('file_system')
+warnings.filterwarnings(action='ignore')
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 torch.backends.cudnn.benchmark = True
@@ -50,7 +54,7 @@ def init(train_batch, val_batch, test_batch, imagenet_batch):
     ])
 
     transform_imagenet = transforms.Compose([
-        transforms.RandomResizedCrop(224),
+        transforms.Resize(size=[64, 64]),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.ToTensor(),
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
@@ -87,6 +91,7 @@ class TrainManager(object):
     def __init__(
             self,
             model,
+            indicator,
             optimizer,
             args,
             additional_cfg,
@@ -98,6 +103,7 @@ class TrainManager(object):
             num_classes=None,
             ):
         self.model = model
+        self.indicator = indicator
         self.train_loader = train_loader
         self.optimizer = optimizer
         self.args = args
@@ -107,6 +113,7 @@ class TrainManager(object):
         self.val_loader = val_loader
         self.imagenet_loader = imagenet_loader
         self.num_classes = num_classes
+        self.top1acc=0
 
     def validate(self, loader, device, topk=(1,3,5)):
         self.model.eval()
@@ -121,9 +128,7 @@ class TrainManager(object):
                 labels = labels.to(device)
 
                 total += image.shape[0]
-
-                with torch.cuda.amp.autocast():
-                    outputs = self.model(image) # b x 1
+                outputs, _= self.model(image) # b x 1
 
                 _, pred = outputs.topk(maxk, 1, True, True)
                 pred = pred.t()
@@ -149,54 +154,62 @@ class TrainManager(object):
     def train(self):
         start = time.time()
         epoch = 0
-        iter_per_epoch = len(self.train_loader) * 4
+        iter_per_epoch = len(self.train_loader)
         print("  iteration per epoch(considered batch size): ", iter_per_epoch)
+        print("  train iter : ", len(self.train_loader))
+        print("  val iter : ", len(self.val_loader))
+        print("  image iter : ", len(self.imagenet_loader))
         print("  Progress bar for training epochs:")
         end_epoch = self.args.start_epoch + self.args.num_epochs
 
-        dataloader = iter(zip(cycle(self.train_loader), cycle(self.imagenet_loader)))
+        img_dataloader = iter(self.imagenet_loader)
 
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
             self.model.train()
+
+            top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
+            self.top1acc = top1_acc
+            wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
+            
             for idx, param_group in enumerate(self.optimizer.param_groups):
                 avg_lr = param_group['lr']
                 wandb.log({str(idx)+"_lr": math.log10(avg_lr), 'epoch': epoch})
 
-            for t_idx in tqdm(range(0, iter_per_epoch), desc='batch_iter', leave=False):
-                
-                sup, semisup = next(dataloader)
-
-                image, target = sup
-                image_ul, target_ul = semisup
+            for t_idx, (image, target) in tqdm(enumerate(self.train_loader), desc='batch_iter', leave=False):
                 
                 image = image.to(self.add_cfg['device']) # DL20
                 target = target.to(self.add_cfg['device'])
 
-                image_ul = image_ul.to(self.add_cfg['device']) # imagenet data
-                target_ul = target_ul.to(self.add_cfg['device']) # do not use this label in training.
-
-
                 self.optimizer.zero_grad()
                 losses_list = []
                 with torch.cuda.amp.autocast():
-                    outputs = self.model(image)
+                    ### sup loss ###
+                    outputs, _ = self.model(image)
                     celoss = CEloss(outputs, target)
                     losses_list.append(celoss)   
                     wandb.log({"training/celoss" : celoss})
 
-                t_loss = total_loss(losses_list)
+                    tri_loss, pm, nm  = triplet_loss(self.model, image, target)
+                    wandb.log({"training/dist_anchor_neg" : nm, "training/dist_anchor_pos" : pm}, commit=False)
+                    threshold = (pm + nm)/2
+                    losses_list.append(tri_loss)
+                    
+                    if top1_acc >= 70:
+                        image_ul, _ = next(img_dataloader)
+                        image_ul = image_ul.to(self.add_cfg['device'])
+                        b_loss = unsup_do(self.model, image, image_ul, threshold)
+                        losses_list.append(b_loss) 
 
+                t_loss = total_loss(losses_list)
                 self.scaler.scale(t_loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
-                if t_idx % 50 == 0:
-                    visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/input_image")
-                    visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/imagenet")
-                    
-
-            top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
-            wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
+                del image, target, losses_list, t_loss, outputs
+                if image_ul is not None:
+                    del image_ul
+                torch.cuda.empty_cache()
+            
             self.adjust_learning_rate(epoch)
             self.save_ckpt(epoch)
             
@@ -232,24 +245,31 @@ def main(args):
     # torch.manual_seed(args.seed)
     # torch.cuda.manual_seed(args.seed)
     # torch.cuda.manual_seed_all(args.seed) # if use multi-GPU
-    # torch.backends.cudnn.deterministic = False
+    #torch.backends.cudnn.deterministic = False
     # np.random.seed(args.seed)
     # random.seed(args.seed)
+    torch.backends.cudnn.benchmark = False
 
     wandb.init(project="DL20")
     orig_cwd = os.getcwd()
     
     # bring effi model from this : https://github.com/lukemelas/EfficientNet-PyTorch
-    model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20)
+    model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20).cuda()
+    #indicator = vgg16_cnn().cuda()
+    
     wandb.watch(model)
+    #wandb.watch(indicator)
 
     additional_cfg = {'device': None}
     additional_cfg['device'] = torch.device('cuda')
 
-    model = model.cuda()
+    trainable_params = [
+        {'params': list(filter(lambda p:p.requires_grad, model.parameters())), 'lr':args.lr},
+        #{'params': list(filter(lambda p:p.requires_grad, indicator.parameters())), 'lr':args.lr}
+    ]
 
     optimizer = torch.optim.SGD(
-        model.parameters(),
+        trainable_params,
         lr=args.lr,
         weight_decay=args.weight_decay,
         momentum=0.9)
@@ -268,15 +288,19 @@ def main(args):
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.cuda()
-    now = datetime.datetime.now()
-    additional_cfg['tbx_wrtr_dir'] = os.getcwd() + "/checkpoints/" + str(now.strftime('%Y-%m-%d-%H-%M-%S'))
 
+    now = datetime.datetime.now()
+    ti = str(now.strftime('%Y-%m-%d-%H-%M-%S'))
+    additional_cfg['tbx_wrtr_dir'] = os.getcwd() + "/checkpoints/" + str(ti)
+
+    wandb.run.name = str(ti)
     train_loader, val_loader, test_loader, imagenet_loader = init(
         args.batch_size_train, args.batch_size_val, args.batch_size_test, args.batch_size_imagenet
     )
 
     trainer = TrainManager(
         model,
+        None,#indicator,
         optimizer,
         args,
         additional_cfg,
@@ -300,25 +324,25 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size-train', type=int, default=16,    
                         help='Batch size for train data (default: 16)')
     parser.add_argument('--batch-size-val', type=int, default=16,
-                        help='Batch size for val data (default: 16)')
+                        help='Batch size for val data (default: 1)')
     parser.add_argument('--batch-size-test', type=int, default=16,
-                        help='Batch size for test data (default: 16)')
-    parser.add_argument('--batch-size-imagenet', type=int, default=16,
+                        help='Batch size for test data (default: 128)')
+    parser.add_argument('--batch-size-imagenet', type=int, default=20,
                         help='Batch size for test data (default: 128)')
 
-    parser.add_argument('--save-ckpt', type=int, default=10,
+    parser.add_argument('--save-ckpt', type=int, default=3,
                         help='number of epoch save current weight? (default: 5)')
 
     parser.add_argument('--start-epoch', type=int, default=0,
                         help='start epoch (default: 0)')
-    parser.add_argument('--num-epochs', type=int, default=100,
+    parser.add_argument('--num-epochs', type=int, default=200,
                         help='end epoch (default: 30)')
 
     parser.add_argument('--lr', type=float, default=1e-3,
                         help='Initial learning rate (default: 0.001)')
     parser.add_argument('--weight-decay', type=float, default=1e-5,
                         help='Weight decay for SGD (default: 0.0005)')
-    parser.add_argument('--lr-anneal-rate', type=float, default=0.95,
+    parser.add_argument('--lr-anneal-rate', type=float, default=0.995,
                         help='Annealing rate (default: 0.95)')
     
 
