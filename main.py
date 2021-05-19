@@ -150,7 +150,6 @@ class TrainManager(object):
 
         return (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
 
-
     def train(self):
         start = time.time()
         epoch = 0

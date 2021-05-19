@@ -4,3 +4,4 @@ dataset/ImageNet
 wandb/
 checkpoints/
 .DS_Store
+.env

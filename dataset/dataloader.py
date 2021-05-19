@@ -35,7 +35,7 @@ class LoadDataset(Dataset):
         if self.mode == "test":
             img = Image.open(self.data[index]).convert('RGB')
             img = self.transform(img)
-            return img
+            return img, self.data[index]
         else:
             img, label = self.data[index]
             img, label = self.transform(img), int(label)
