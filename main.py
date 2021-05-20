@@ -248,14 +248,11 @@ class TrainManager(object):
             for idx, param_group in enumerate(self.optimizer.param_groups):
                 avg_lr = param_group['lr']
                 wandb.log({str(idx)+"_lr": math.log10(avg_lr), 'epoch': epoch})
-
             for t_idx in tqdm(range(0, iter_per_epoch), desc='batch_iter', leave=False):
                 image, target = next(dataloader)
                 image = upscale_layer(image)
-
                 image = image.to(self.add_cfg['device']) # DL20
                 target = target.to(self.add_cfg['device'])
-
                 self.optimizer.zero_grad()
                 losses_list = []
                 with torch.cuda.amp.autocast():
@@ -264,11 +261,9 @@ class TrainManager(object):
                     losses_list.append(celoss)   
                     wandb.log({"training/celoss" : celoss})
                 t_loss = total_loss(losses_list)
-
                 self.scaler.scale(t_loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()              
-
             top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
             wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
             self.adjust_learning_rate(epoch)
