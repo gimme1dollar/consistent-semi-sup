@@ -24,7 +24,7 @@ imagenet_std = [0.229, 0.224, 0.225]
 data_path = pjn(os.getcwd(), "dataset", "DL20")
 imagenet_data_path = pjn(os.getcwd(), "dataset", "ImageNet")
 
-def init(train_batch, val_batch, test_batch, imagenet_batch):
+def init(train_batch, val_batch, test_batch):#, imagenet_batch):
     # default augmentation functions : http://incredible.ai/pytorch/2020/04/25/Pytorch-Image-Augmentation/ 
     # for more augmentation functions : https://github.com/aleju/imgaug
 
@@ -48,17 +48,17 @@ def init(train_batch, val_batch, test_batch, imagenet_batch):
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
     ])
 
-    transform_imagenet = transforms.Compose([
-        transforms.RandomResizedCrop(224),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
-    ])
+    #transform_imagenet = transforms.Compose([
+    #    transforms.RandomResizedCrop(224),
+    #    transforms.RandomHorizontalFlip(p=0.5),
+    #    transforms.ToTensor(),
+    #    transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
+    #])
 
     train_dataset = LoadDataset(data_path = data_path, transform=transform_train , mode='train')
     val_dataset = LoadDataset(data_path = data_path, transform=transform_val , mode='valid')
     test_dataset = LoadDataset(data_path = data_path, transform=transform_test , mode='test')
-    imagenet_dataset = IMDataset(data_path = imagenet_data_path, transform=transform_imagenet)
+    #imagenet_dataset = IMDataset(data_path = imagenet_data_path, transform=transform_imagenet)
 
     train_loader = torch.utils.data.DataLoader(
             dataset=train_dataset, batch_size=train_batch,
@@ -75,12 +75,12 @@ def init(train_batch, val_batch, test_batch, imagenet_batch):
             num_workers=4, shuffle=False, pin_memory=True
     )
 
-    imagenet_loader = torch.utils.data.DataLoader(
-            dataset=imagenet_dataset, batch_size=imagenet_batch,
-            num_workers=4, shuffle=True, pin_memory=True
-    )
+    #imagenet_loader = torch.utils.data.DataLoader(
+    #        dataset=imagenet_dataset, batch_size=imagenet_batch,
+    #        num_workers=4, shuffle=True, pin_memory=True
+    #)
 
-    return train_loader, val_loader, test_loader, imagenet_loader
+    return train_loader, val_loader, test_loader#, imagenet_loader
     
 class TrainManager(object):
     def __init__(
@@ -92,7 +92,7 @@ class TrainManager(object):
             train_loader,
             val_loader,
             test_loader,
-            imagenet_loader,
+            #imagenet_loader,
             scaler=None,
             num_classes=None,
             ):
@@ -104,7 +104,7 @@ class TrainManager(object):
         self.tbx_wrtr_dir = additional_cfg.get('tbx_wrtr_dir')
         self.scaler = scaler
         self.val_loader = val_loader
-        self.imagenet_loader = imagenet_loader
+        #self.imagenet_loader = imagenet_loader
         self.num_classes = num_classes
 
     def validate(self, loader, device, topk=(1,3,5)):
@@ -153,7 +153,7 @@ class TrainManager(object):
         print("  Progress bar for training epochs:")
         end_epoch = self.args.start_epoch + self.args.num_epochs
 
-        dataloader = iter(zip(cycle(self.train_loader), cycle(self.imagenet_loader)))
+        dataloader = iter(cycle(self.train_loader))#, cycle(self.imagenet_loader)))
 
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
             self.model.train()
@@ -163,9 +163,7 @@ class TrainManager(object):
 
             for t_idx in tqdm(range(0, iter_per_epoch), desc='batch_iter', leave=False):
                 
-                sup, semisup = next(dataloader)
-
-                image, target = sup
+                image, target = next(dataloader)
                 #image_ul, target_ul = semisup
                 
                 image = image.to(self.add_cfg['device']) # DL20
@@ -192,9 +190,6 @@ class TrainManager(object):
                 #if t_idx % 50 == 0:
                 #    visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/input_image")
                 #    #visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/imagenet")
-                    
-                del image, semisup
-
             top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
             wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
             self.adjust_learning_rate(epoch)
@@ -271,8 +266,8 @@ def main(args):
     now = datetime.datetime.now()
     additional_cfg['tbx_wrtr_dir'] = os.getcwd() + "/checkpoints/" + str(now.strftime('%Y-%m-%d-%H-%M-%S'))
 
-    train_loader, val_loader, test_loader, imagenet_loader = init(
-        args.batch_size_train, args.batch_size_val, args.batch_size_test, args.batch_size_imagenet
+    train_loader, val_loader, test_loader = init(
+        args.batch_size_train, args.batch_size_val, args.batch_size_test
     )
 
     trainer = TrainManager(
@@ -283,7 +278,7 @@ def main(args):
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=test_loader,
-        imagenet_loader=imagenet_loader,
+        #imagenet_loader=imagenet_loader,
         scaler=scaler,
         num_classes=20
     )
@@ -297,13 +292,13 @@ if __name__ == "__main__":
     parser.add_argument('--pretrained-ckpt', type=str, default=None,
                         help='Load pretrained weight, write path to weight (default: None)')
     
-    parser.add_argument('--batch-size-train', type=int, default=1,    
+    parser.add_argument('--batch-size-train', type=int, default=16,    
                         help='Batch size for train data (default: 16)')
-    parser.add_argument('--batch-size-val', type=int, default=1,
+    parser.add_argument('--batch-size-val', type=int, default=16,
                         help='Batch size for val data (default: 16)')
-    parser.add_argument('--batch-size-test', type=int, default=1,
+    parser.add_argument('--batch-size-test', type=int, default=16,
                         help='Batch size for test data (default: 16)')
-    parser.add_argument('--batch-size-imagenet', type=int, default=1,
+    parser.add_argument('--batch-size-imagenet', type=int, default=16,
                         help='Batch size for test data (default: 128)')
 
     parser.add_argument('--save-ckpt', type=int, default=10,

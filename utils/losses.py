@@ -30,7 +30,9 @@ def CEloss(inputs, gt):
     return nn.CrossEntropyLoss()(inputs, gt)
 
 def MSEloss(inputs, gt):
-    return nn.MSELoss(inputs, gt)
+    c = nn.MSELoss()
+    loss = c(inputs,gt)
+    return loss
 
 def total_loss(losses_list):
     total = 0
