@@ -3,18 +3,17 @@ import torch
 import torch.nn as nn
 import torch.multiprocessing
 from torchvision import transforms, utils
-from dataset.dataloader import LoadDataset, IMDataset, GradCAM
+from dataset.dataloader import LoadDataset, IMDataset
 from tqdm import tqdm, tqdm_notebook
 from os.path import join as pjn
 import os.path, os, datetime, math, random, time
 import numpy as np
 import wandb, argparse
 from efficientnet_pytorch.model import EfficientNet
-from utils.losses import CEloss, total_loss, MSEloss
+from utils.losses import CEloss, total_loss
 from utils.visualize import *
 from itertools import cycle
-import torchvision.transforms.functional as F
-from typing import Callable
+
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 torch.backends.cudnn.benchmark = True
@@ -26,7 +25,6 @@ data_path = pjn(os.getcwd(), "dataset", "DL20")
 imagenet_data_path = pjn(os.getcwd(), "dataset", "ImageNet")
 
 def init(train_batch, val_batch, test_batch, imagenet_batch):
-
     # default augmentation functions : http://incredible.ai/pytorch/2020/04/25/Pytorch-Image-Augmentation/ 
     # for more augmentation functions : https://github.com/aleju/imgaug
 
@@ -51,7 +49,10 @@ def init(train_batch, val_batch, test_batch, imagenet_batch):
     ])
 
     transform_imagenet = transforms.Compose([
-        transforms.ToTensor()
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
     ])
 
     train_dataset = LoadDataset(data_path = data_path, transform=transform_train , mode='train')
@@ -105,54 +106,6 @@ class TrainManager(object):
         self.val_loader = val_loader
         self.imagenet_loader = imagenet_loader
         self.num_classes = num_classes
-        
-
-        self.save_feat=[]
-        self.save_grad=[]
-        for idx, module in enumerate(self.model.modules()):
-            #if idx > 200:
-            #    print(idx, module)
-            if idx == 257:
-                module.register_forward_hook(self.save_outputs_hook())
-
-        self.to_tensor_transform = transforms.Compose([
-            transforms.ToTensor()
-        ])
-        self.resize_transform = transforms.Compose([
-            transforms.Resize((64, 64))
-        ])
-
-    def save_outputs_hook(self) -> Callable:
-        def fn(_, __, output):
-            #print(output.size())
-            self.save_feat.append(output)
-        return fn
-
-    def save_grad_hook(self) -> Callable:
-        def fn(grad):
-            self.save_grad.append(grad)
-        return fn
-
-    def color_augmentation(self, i, img):
-        color_transform = transforms.Compose([
-            transforms.ColorJitter(i, i, i, i)
-        ])
-
-        return color_transform(img)
-
-    def get_crop_params(self, img):
-        w_, h_ = img.size(2), img.size(3)
-        xl = random.randint(0, w_ / 8)
-        xr = 0
-        while (((xr - xl) < (w_ * 7 / 8)) and (xr <= xl)):
-            xr = random.randint(xl, w_)
-
-        yl = random.randint(0, h_ / 8)
-        yr = 0
-        while (((yr - yl) < (h_ * 7 / 8)) and (yr <= yl)):
-            yr = random.randint(yl, h_)
-
-        return xl, yl, xr, yr
 
     def validate(self, loader, device, topk=(1,3,5)):
         self.model.eval()
@@ -187,47 +140,11 @@ class TrainManager(object):
                         correct_5 += correct_k.item()
                     else:
                         raise NotImplementedError("Invalid top-k num")
-
-
+            
+                del image
         return (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
 
-    def get_grad_cam(self, image):
-        #print()
-        self.save_feat=[]
-        image = image.unsqueeze(0)
-        s = self.model(image)[0]
 
-        self.save_grad=[]
-        self.save_feat[0].register_hook(self.save_grad_hook())
-        #print(f"save_feat size: {np.shape(self.save_feat[0])}")
-
-        y = torch.argmax(s).item()
-        s_y = s[y]
-        s_y.backward()
-        #print(f"save_grad size: {np.shape(self.save_grad[0][0])}")
-        
-        gap_layer = torch.nn.AdaptiveAvgPool2d(1)
-        alpha = gap_layer(self.save_grad[0][0])
-        #print(f"alpha size: {alpha.size()}")
-        A = self.save_feat[0]
-        A = A.squeeze()
-        #print(f"A size: {A.size()}")
-
-        weighted_sum = torch.sum(alpha*A, dim=0)
-        relu_layer = torch.nn.ReLU()
-        grad_CAM = relu_layer(weighted_sum)
-        grad_CAM = grad_CAM.unsqueeze(0)
-        grad_CAM = grad_CAM.unsqueeze(0)
-        #print(f"grad_CAM size: {grad_CAM.size()}")
-
-        sf = image.shape[-1]/grad_CAM.shape[-1]
-        #print(sf)
-        #return 1
-        upscale_layer = torch.nn.Upsample(scale_factor=sf, mode='bilinear', align_corners=True)
-        grad_CAM = upscale_layer(grad_CAM)
-        grad_CAM = grad_CAM/torch.max(grad_CAM)
-        return grad_CAM.squeeze()
-        
     def train(self):
         start = time.time()
         epoch = 0
@@ -249,25 +166,14 @@ class TrainManager(object):
                 sup, semisup = next(dataloader)
 
                 image, target = sup
-                image_ul = semisup
-
-                wk_image = self.color_augmentation(0.1, image)
-
-                i, j, h, w = self.get_crop_params(image)
-                st_image = F.crop(image, i, j, h, w)
-                st_image = self.color_augmentation(0.5, st_image)
-                st_image = self.resize_transform(st_image)
-                st_image = st_image.cuda()
-
+                #image_ul, target_ul = semisup
+                
                 image = image.to(self.add_cfg['device']) # DL20
                 target = target.to(self.add_cfg['device'])
 
-                image_ul = image_ul.to(self.add_cfg['device']) # imagenet data
+                #image_ul = image_ul.to(self.add_cfg['device']) # imagenet data
+                #target_ul = target_ul.to(self.add_cfg['device']) # do not use this label in training.
 
-                cam_ul = []
-                for i_ul in image_ul:
-                    cam_ul.append(self.get_grad_cam(i_ul))
-                cam_ul = torch.stack(cam_ul)
 
                 self.optimizer.zero_grad()
                 losses_list = []
@@ -283,12 +189,11 @@ class TrainManager(object):
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
-                if t_idx % 50 == 0:
-                    visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/input_image")
-                    visualize_rescale_image(imagenet_mean, imagenet_std, image_ul, "training/imagenet_og")
-                    visualize_rescale_image(imagenet_mean, imagenet_std, wk_image, "training/imagenet_wk")
-                    visualize_rescale_image(imagenet_mean, imagenet_std, st_image, "training/imagenet_st")
-                    visualize_cam(image_ul, cam_ul, imagenet_mean, imagenet_std, "cam/imagenet")                    
+                #if t_idx % 50 == 0:
+                #    visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/input_image")
+                #    #visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/imagenet")
+                    
+                del image, semisup
 
             top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
             wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
@@ -392,13 +297,13 @@ if __name__ == "__main__":
     parser.add_argument('--pretrained-ckpt', type=str, default=None,
                         help='Load pretrained weight, write path to weight (default: None)')
     
-    parser.add_argument('--batch-size-train', type=int, default=16,    
+    parser.add_argument('--batch-size-train', type=int, default=1,    
                         help='Batch size for train data (default: 16)')
-    parser.add_argument('--batch-size-val', type=int, default=16,
+    parser.add_argument('--batch-size-val', type=int, default=1,
                         help='Batch size for val data (default: 16)')
-    parser.add_argument('--batch-size-test', type=int, default=16,
+    parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 16)')
-    parser.add_argument('--batch-size-imagenet', type=int, default=16,
+    parser.add_argument('--batch-size-imagenet', type=int, default=1,
                         help='Batch size for test data (default: 128)')
 
     parser.add_argument('--save-ckpt', type=int, default=10,

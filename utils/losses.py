@@ -29,6 +29,9 @@ def constrative_loss(div1_origin, div2_new, target):
 def CEloss(inputs, gt):
     return nn.CrossEntropyLoss()(inputs, gt)
 
+def MSEloss(inputs, gt):
+    return nn.MSELoss(inputs, gt)
+
 def total_loss(losses_list):
     total = 0
     for component in losses_list:
