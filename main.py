@@ -15,6 +15,7 @@ from utils.visualize import *
 from itertools import cycle
 import torchvision.transforms.functional as F
 from typing import Callable
+import math
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 torch.backends.cudnn.benchmark = True
@@ -275,6 +276,7 @@ class TrainManager(object):
         '''
 
         ## gradcam
+        p_cutoff = 0.95
         dataloader = iter(zip(cycle(self.train_loader), cycle(self.imagenet_loader)))
         #upscale_layer = torch.nn.Upsample(scale_factor=16, mode='bilinear', align_corners=True)
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
@@ -290,22 +292,23 @@ class TrainManager(object):
                 image, target = sup
                 image_ul = semisup
 
-                wk_image = self.color_augmentation(0.1, image)
+                image = image.cuda()
+                target = target.cuda()
+                image_ul = image_ul.cuda()
+
+                ## Augmentation
+                wk_image = self.color_augmentation(0.1, image_ul)
                 wk_image = wk_image.cuda()
                 #print(f"wk_image size : {wk_image.size()}")
 
                 i, j, h, w = self.get_crop_params(image)
                 st_image = F.crop(image, i, j, h, w)
-                st_image = self.color_augmentation(0.5, st_image)
+                st_image = self.color_augmentation(0.5, image_ul)
                 st_image = self.resize_transform(st_image)
                 st_image = st_image.cuda()
                 #print(f"st_image size : {st_image.size()}")
 
-                image = image.to(self.add_cfg['device']) # DL20
-                target = target.to(self.add_cfg['device'])
-
-                image_ul = image_ul.to(self.add_cfg['device']) # imagenet data
-
+                ## Getting cam
                 wk_cam = []
                 for img in wk_image:
                     img = img.unsqueeze(0)
@@ -326,6 +329,27 @@ class TrainManager(object):
                 gt_cam = self.resize_transform(gt_cam)
                 #print(f"gt_cam size : {gt_cam.size()}")
 
+                ## Masking meaningful samples
+                wk_label = self.model(wk_image)
+                wk_pred  = torch.argmax(wk_label, dim=-1)
+
+                st_label = self.model(st_image)
+                st_pred  = torch.argmax(st_label, dim=-1)
+
+                wk_pred = wk_pred.cpu().detach().numpy()
+                st_pred = st_pred.cpu().detach().numpy()
+                mask_s = [ int(wk_pred[i] == st_pred[i]) for i in range(len(wk_pred))]
+                #print(mask_s)
+
+                wk_prob = torch.softmax(wk_label, dim=-1)
+                max_probs, max_idx = torch.max(wk_prob, dim=-1)
+                mask_p = max_probs.ge(p_cutoff).float()
+                mask_p = mask_p.cpu().detach().numpy()
+                #print(mask_p)
+
+                mask = [ int(mask_s[i] and mask_p[i]) for i in range(len(wk_pred))]
+                #print(f"mask : {mask}")
+
                 self.optimizer.zero_grad()
                 losses_list = []
                 with torch.cuda.amp.autocast():
@@ -333,8 +357,9 @@ class TrainManager(object):
                     celoss = CEloss(outputs, target)
                     losses_list.append(celoss)   
 
-                    mseloss = MSEloss(st_cam, gt_cam)
-                    losses_list.append(mseloss)
+                    mseloss = MSEloss(st_cam[mask], gt_cam[mask])
+                    if math.isnan(mseloss) is False:
+                        losses_list.append(mseloss)
 
                     wandb.log({"training/celoss" : celoss})
 
@@ -345,13 +370,15 @@ class TrainManager(object):
                 self.scaler.update()
 
                 if t_idx % 50 == 0:
-                    visualize_rescale_image(imagenet_mean, imagenet_std, image, "training/input_image")
-                    visualize_rescale_image(imagenet_mean, imagenet_std, image_ul, "training/imagenet_og")
-                    visualize_rescale_image(imagenet_mean, imagenet_std, wk_image, "training/imagenet_wk")
-                    visualize_rescale_image(imagenet_mean, imagenet_std, st_image, "training/imagenet_st")
-                    visualize_cam(image_ul, wk_cam, imagenet_mean, imagenet_std, "wk_cam/imagenet")         
-                    visualize_cam(image_ul, st_cam, imagenet_mean, imagenet_std, "st_cam/imagenet")         
-                    visualize_cam(image_ul, gt_cam, imagenet_mean, imagenet_std, "gt_cam/imagenet")                     
+                    visualize_rescale_image(imagenet_mean, imagenet_std, image, "input_image")
+                    visualize_rescale_image(imagenet_mean, imagenet_std, image_ul, "imagenet_org")
+                    visualize_rescale_image(imagenet_mean, imagenet_std, wk_image, "imagenet_wk")
+                    visualize_rescale_image(imagenet_mean, imagenet_std, st_image, "imagenet_st")
+                    visualize_cam(image_ul, wk_cam, imagenet_mean, imagenet_std, "wk_cam_imagenet")         
+                    visualize_cam(image_ul, st_cam, imagenet_mean, imagenet_std, "st_cam_imagenet")         
+                    visualize_cam(image_ul, gt_cam, imagenet_mean, imagenet_std, "gt_cam_imagenet")                     
+
+                del wk_image, wk_label, wk_pred, wk_cam, wk_prob, st_image, st_label, st_pred, st_cam
 
             top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
             wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
