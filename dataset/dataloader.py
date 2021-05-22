@@ -40,3 +40,59 @@ class LoadDataset(Dataset):
             img, label = self.data[index]
             img, label = self.transform(img), int(label)
             return img, label
+
+        
+        def string_to_sequence(s: str, dtype=np.int32) -> np.ndarray:
+    return np.array([ord(c) for c in s], dtype=dtype)
+
+def sequence_to_string(seq: np.ndarray) -> str:
+    return ''.join([chr(c) for c in seq])
+
+def pack_sequences(seqs: Union[np.ndarray, list]):
+    values = np.concatenate(seqs, axis=0)
+    offsets = np.cumsum([len(s) for s in seqs])
+    return values, offsets
+
+def unpack_sequence(values: np.ndarray, offsets: np.ndarray, index: int) -> np.ndarray:
+    off1 = offsets[index]
+    if index > 0:
+        off0 = offsets[index - 1]
+    elif index == 0:
+        off0 = 0
+    else:
+        raise ValueError(index)
+    return values[off0:off1]
+
+class LoadSemiDataset(Dataset):
+    def __init__(self, data_path, transform, mode='label', ratio=0.05):
+        super(LoadSemiDataset, self).__init__()
+        self.data_path = data_path
+        self.list_name = str(ratio)+"_"+mode+"_path_list.txt"
+        self.mode = mode
+        self.transform = transform
+        
+        self.load_dataset()
+
+    def load_dataset(self):
+        root = os.path.join(self.data_path, self.list_name)
+        print(root)
+        with open(os.path.join(self.data_path, self.list_name), "r") as f:
+            file_names = [x.strip() for x in f.readlines()]
+        self.image_len = len(file_names)
+        img_seq = [string_to_sequence(s) for s in file_names]
+        self.image_v, self.image_o = pack_sequences(img_seq)
+
+    def __len__(self):
+        return self.image_len
+
+    def __getitem__(self, index):
+        path = sequence_to_string(unpack_sequence(self.image_v, self.image_o, index))
+        label = int(path.split("/")[4])
+        img = Image.open(path).convert('RGB')
+        img = self.transform(img)
+        if self.mode == 'label':
+            return img, label
+        elif self.mode == 'unlabel':
+            return img
+        else: 
+            raise NotImplementedError()
