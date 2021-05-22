@@ -236,12 +236,13 @@ class TrainManager(object):
         upscale_layer = torch.nn.Upsample(scale_factor=sf, mode='bilinear', align_corners=True)
         grad_CAM = upscale_layer(grad_CAM)
         grad_CAM = grad_CAM/torch.max(grad_CAM)
+        self.model.zero_grad()
         return grad_CAM.squeeze()
         
     def train(self):
         start = time.time()
         epoch = 0
-        iter_per_epoch = len(self.train_loader)
+        iter_per_epoch = len(self.train_loader)//500
         print("  iteration per epoch(considered batch size): ", iter_per_epoch)
         print("  Progress bar for training epochs:")
         end_epoch = self.args.start_epoch + self.args.num_epochs
@@ -251,6 +252,9 @@ class TrainManager(object):
         dataloader = iter(zip(cycle(self.train_loader), cycle(self.imagenet_loader)))
         upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
+
+            top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
+            wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
             
             for idx, param_group in enumerate(self.optimizer.param_groups):
                 avg_lr = param_group['lr']
@@ -335,11 +339,10 @@ class TrainManager(object):
                 del st_image
 
 
-                mask = [ torch.ones_like(gt_cam[0]) if int(mask_s[i] and mask_p[i]) else torch.zeros_like(gt_cam[0]) for i in range(gt_cam.size(0))]
+                mask = [ torch.ones_like(gt_cam[0]) if int(mask_p[i]) else torch.zeros_like(gt_cam[0]) for i in range(gt_cam.size(0))]
                 mask = torch.stack(mask)
                 #print(f"mask size: {mask.size()}")
                 #print(f"masked st_cam size: {(st_cam * mask).size()}")
-
 
                 self.optimizer.zero_grad()
                 losses_list = []
@@ -360,6 +363,10 @@ class TrainManager(object):
 
                 mask = [ int(mask_s[i] and mask_p[i]) for i in range(gt_cam.size(0))]
                 if t_idx % 50 == 0:
+                    if mseloss > 0:
+                        print(mseloss)
+                        print(t_loss)
+                        print(mask)
                     wandb.log({"training/mask" : mask})
                 del wk_prob
 
@@ -369,8 +376,6 @@ class TrainManager(object):
 
                 del wk_cam, st_cam, gt_cam
 
-            top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
-            wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
             self.adjust_learning_rate(epoch)
             self.save_ckpt(epoch)
             
@@ -473,7 +478,7 @@ if __name__ == "__main__":
     
     parser.add_argument('--batch-size-train', type=int, default=4,    
                         help='Batch size for train data (default: 16)')
-    parser.add_argument('--batch-size-val', type=int, default=2,
+    parser.add_argument('--batch-size-val', type=int, default=16,
                         help='Batch size for val data (default: 16)')
     parser.add_argument('--batch-size-test', type=int, default=4,
                         help='Batch size for test data (default: 16)')

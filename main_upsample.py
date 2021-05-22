@@ -114,9 +114,12 @@ class TrainManager(object):
         correct_1 = 0
         correct_3 = 0
         correct_5 = 0
+
+        upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
         with torch.no_grad():
             for b_idx, (image, labels) in tqdm(enumerate(loader), desc="validation", leave=False):
                 image = image.to(device)
+                image = upscale_layer(image)
                 labels = labels.to(device)
 
                 total += image.shape[0]
