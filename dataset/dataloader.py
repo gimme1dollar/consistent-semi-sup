@@ -5,44 +5,10 @@ from torch.utils.data import Dataset
 from torchvision.datasets import ImageFolder
 import glob
 from PIL import Image
+from typing import Union
+import numpy as np
 
-class LoadDataset(Dataset):
-    def __init__(self, data_path, transform, mode='train'):
-        super(LoadDataset, self).__init__()
-        self.data_path = data_path
-        self.mode = mode
-        self.transform = transform
-        
-        if mode == "test":
-            self.test_load()
-        else : 
-            self.load_dataset()
-
-    def test_load(self):
-        root = os.path.join(self.data_path, self.mode)
-        print("root : ", root)
-        self.data = glob.glob(root+"/*.png")
-        
-    def load_dataset(self):
-        root = os.path.join(self.data_path, self.mode)
-        print("root : ", root)
-        self.data = ImageFolder(root=root)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        if self.mode == "test":
-            img = Image.open(self.data[index]).convert('RGB')
-            img = self.transform(img)
-            return img
-        else:
-            img, label = self.data[index]
-            img, label = self.transform(img), int(label)
-            return img, label
-
-        
-        def string_to_sequence(s: str, dtype=np.int32) -> np.ndarray:
+def string_to_sequence(s: str, dtype=np.int32) -> np.ndarray:
     return np.array([ord(c) for c in s], dtype=dtype)
 
 def sequence_to_string(seq: np.ndarray) -> str:
@@ -63,6 +29,57 @@ def unpack_sequence(values: np.ndarray, offsets: np.ndarray, index: int) -> np.n
         raise ValueError(index)
     return values[off0:off1]
 
+def path_join(train_path, label, file_list):
+    path_list = []
+    for f in file_list:
+        path_list.append(os.path.join(train_path, label, f))
+    
+    return path_list
+class LoadDataset(Dataset):
+    def __init__(self, data_path, transform, mode='valid'):
+        super(LoadDataset, self).__init__()
+        self.data_path = data_path
+        self.mode = mode
+        self.transform = transform
+        
+        if mode == "test":
+            self.test_load()
+        else : 
+            self.load_dataset()
+
+    def test_load(self):
+        root = os.path.join(self.data_path, self.mode)
+        print("root : ", root)
+        self.data = glob.glob(root+"/*.png")
+        
+    def load_dataset(self):
+        train_path = os.path.join(self.data_path, self.mode)
+        folder_list = os.listdir(train_path) # folder list [0,1,2,...,19]
+
+        path_list = []
+        for label_num in folder_list:
+            file_path = os.path.join(train_path, label_num)     
+            file_list = os.listdir(file_path)
+            path_list += path_join(train_path, label_num, file_list)
+        self.image_len = len(path_list)
+        img_seq = [string_to_sequence(s) for s in path_list]
+        self.image_v, self.image_o = pack_sequences(img_seq)
+
+    def __len__(self):
+        return self.image_len
+
+    def __getitem__(self, index):
+        if self.mode == "test":
+            img = Image.open(self.data[index]).convert('RGB')
+            img = self.transform(img)
+            return img
+        else:
+            path = sequence_to_string(unpack_sequence(self.image_v, self.image_o, index))
+            label = int(path.split("/")[-2])
+            img = Image.open(path).convert('RGB')
+            img = self.transform(img)
+
+            return img, label
 class LoadSemiDataset(Dataset):
     def __init__(self, data_path, transform, mode='label', ratio=0.05):
         super(LoadSemiDataset, self).__init__()
@@ -87,7 +104,7 @@ class LoadSemiDataset(Dataset):
 
     def __getitem__(self, index):
         path = sequence_to_string(unpack_sequence(self.image_v, self.image_o, index))
-        label = int(path.split("/")[4])
+        label = int(path.split("/")[-2])
         img = Image.open(path).convert('RGB')
         img = self.transform(img)
         if self.mode == 'label':
