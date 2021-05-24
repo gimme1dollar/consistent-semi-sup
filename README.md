@@ -24,31 +24,11 @@ valid - [0, 1, 2, ..., 19]
 test - only have images without labels
 
 ---
-#### ImageNet Dataset
+### semi-sup split 
+python split.py
 
-You have to download ImageNet Dataset via kaggle API.
+dataset / DL20 / [0.1_label_path_list.txt, ... ]
 
-reference site : https://teddylee777.github.io/kaggle/Kaggle-API-%EC%82%AC%EC%9A%A9%EB%B2%95
-
-After downloading your kaggle.json, just type ```kaggle competitions download -c imagenet-object-localization-challenge```
-
-It is recommeded to use 7zip for extracting .tar.gz imagenet file.
-
-You have to make following dataset hierarchy:
-
----
-
-dataset / ImageNet / [Annotations, Data, ImageSets]
-
----
-
-Data - [train, test, val]
-
-train - [n01440764, ....]
-val - [...]
-test - [...]
-
----
 
 ## Wandb
 You have to install wandb; ML recording & visualization tool.
