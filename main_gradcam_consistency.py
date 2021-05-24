@@ -10,7 +10,7 @@ import os.path, os, datetime, math, random, time
 import numpy as np
 import wandb, argparse
 from efficientnet_pytorch.model import EfficientNet
-from utils.losses import CEloss, total_loss, MSEloss
+from utils.losses import CEloss, total_loss, MSEloss, SSIM
 from utils.visualize import *
 from itertools import cycle
 import torchvision.transforms.functional as F
@@ -118,6 +118,9 @@ class TrainManager(object):
 
         self.to_tensor_transform = transforms.Compose([
             transforms.ToTensor()
+        ])
+        self.resize_512_transform = transforms.Compose([
+            transforms.Resize((512, 512))
         ])
         self.resize_256_transform = transforms.Compose([
             transforms.Resize((256, 256))
@@ -231,7 +234,7 @@ class TrainManager(object):
         #print(f"grad_CAM size: {grad_CAM.size()}")
 
         #sf = image.shape[-1]/grad_CAM.shape[-1]
-        sf = 8
+        sf = 32
         #return 1
         upscale_layer = torch.nn.Upsample(scale_factor=sf, mode='bilinear', align_corners=True)
         grad_CAM = upscale_layer(grad_CAM)
@@ -242,20 +245,17 @@ class TrainManager(object):
     def train(self):
         start = time.time()
         epoch = 0
-        iter_per_epoch = len(self.train_loader)//500
+        iter_per_epoch = len(self.train_loader)
         print("  iteration per epoch(considered batch size): ", iter_per_epoch)
         print("  Progress bar for training epochs:")
         end_epoch = self.args.start_epoch + self.args.num_epochs
 
         ## gradcam
-        p_cutoff = 0.85
+        p_cutoff = 0.90
         dataloader = iter(zip(cycle(self.train_loader), cycle(self.imagenet_loader)))
         upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
 
-            top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
-            wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
-            
             for idx, param_group in enumerate(self.optimizer.param_groups):
                 avg_lr = param_group['lr']
                 wandb.log({str(idx)+"_lr": math.log10(avg_lr), 'epoch': epoch})
@@ -265,14 +265,27 @@ class TrainManager(object):
                 
                 sup, semisup = next(dataloader)
 
-                #image, target = sup
+                image, target = sup
                 image_ul = semisup
 
-                #image = image.cuda()
-                #target = target.cuda()
+                image = image.cuda()
+                image = upscale_layer(image)
+                target = target.cuda()
+
+
+                self.optimizer.zero_grad()
+                losses_list = []
+                with torch.cuda.amp.autocast():
+                    outputs = self.model(image)
+                    celoss = CEloss(outputs, target)
+                    losses_list.append(celoss)
+                    wandb.log({"training/celoss" : celoss})
+                if t_idx % 50 == 0:
+                    visualize_rescale_image(imagenet_mean, imagenet_std, image, "input_image/DL20")
+                
                 image_ul = image_ul.cuda()
                 image_ul = upscale_layer(image_ul)
-
+                
                 ## Augmentation
                 wk_image = self.color_augmentation(0.1, image_ul)
                 wk_image = wk_image.cuda()
@@ -286,96 +299,87 @@ class TrainManager(object):
                 #print(f"st_image size : {st_image.size()}")
 
                 if t_idx % 50 == 0:
-                    #visualize_rescale_image(imagenet_mean, imagenet_std, image, "input_image/DL20")
                     #visualize_rescale_image(imagenet_mean, imagenet_std, image_ul, "imagenet_org/imagenet")
                     visualize_rescale_image(imagenet_mean, imagenet_std, wk_image, "imagenet_wk/imagenet")
                     visualize_rescale_image(imagenet_mean, imagenet_std, st_image, "imagenet_st/imagenet")
-
-                wk_label = self.model(wk_image)
-                wk_pred  = torch.argmax(wk_label, dim=-1)
-
-                st_label = self.model(st_image)
-                st_pred  = torch.argmax(st_label, dim=-1)
-
-                wk_pred = wk_pred.cpu().detach().numpy()
-                st_pred = st_pred.cpu().detach().numpy()
-                mask_s = [ int(wk_pred[i] == st_pred[i]) for i in range(len(wk_pred))]
-                #print(mask_s)
-
-                wk_prob = torch.softmax(wk_label, dim=-1)
-                max_probs, max_idx = torch.max(wk_prob, dim=-1)
-                mask_p = max_probs.ge(p_cutoff).float()
-                mask_p = mask_p.cpu().detach().numpy()
-                #print(mask_p)
-                del wk_label, st_label
 
                 ## Getting cam
                 wk_cam = []
                 for img in wk_image:
                     img = img.unsqueeze(0)
                     #img = upscale_layer(img)
-                    wk_cam.append(self.get_grad_cam(img))
+                    wk_cam_ = self.get_grad_cam(img)
+                    wk_cam.append(wk_cam_)
                 wk_cam = torch.stack(wk_cam)
                 #print(f"wk_cam size : {wk_cam.size()}")
                 if t_idx % 50 == 0:
                     visualize_cam(wk_image, wk_cam, imagenet_mean, imagenet_std, "wk_cam/imagenet")    
-                del wk_image
 
                 st_cam = []
                 for img in st_image:
                     img = img.unsqueeze(0)
                     #img = upscale_layer(img)
-                    st_cam.append(self.get_grad_cam(img))
+                    st_cam_ = self.get_grad_cam(img)
+                    st_cam.append(st_cam_)
                 st_cam = torch.stack(st_cam)
                 #print(f"st_cam size : {st_cam.size()}")
-
-                gt_cam = F.crop(wk_cam, i, j, h, w)
-                #print(f"gt_cam size : {gt_cam.size()}")
-                gt_cam = self.resize_64_transform(gt_cam)
-                #print(f"gt_cam size : {gt_cam.size()}")
                 if t_idx % 50 == 0:       
                     visualize_cam(st_image, st_cam, imagenet_mean, imagenet_std, "st_cam/imagenet") 
+
+                gt_cam = F.crop(wk_cam, i, j, h, w)
+                gt_cam = self.resize_256_transform(gt_cam)
+                #print(f"gt_cam_resize size : {gt_cam.size()}")
+                if t_idx % 50 == 0:       
                     visualize_cam(st_image, gt_cam, imagenet_mean, imagenet_std, "gt_cam/imagenet")    
-                del st_image
+                
 
-
+                wk_label = self.model(image_ul)
+                wk_prob = torch.softmax(wk_label, dim=-1)
+                #print(f"wk_prob : {wk_prob}")
+                max_probs, max_idx = torch.max(wk_prob, dim=-1)
+                mask_p = max_probs.ge(p_cutoff).float()
+                mask_p = mask_p.cpu().detach().numpy()
+                #print(mask_p)
+                
                 mask = [ torch.ones_like(gt_cam[0]) if int(mask_p[i]) else torch.zeros_like(gt_cam[0]) for i in range(gt_cam.size(0))]
                 mask = torch.stack(mask)
                 #print(f"mask size: {mask.size()}")
-                #print(f"masked st_cam size: {(st_cam * mask).size()}")
 
                 self.optimizer.zero_grad()
-                losses_list = []
                 with torch.cuda.amp.autocast():
-                    #outputs = self.model(image)
-                    #celoss = CEloss(wk_pred, st_pred)
-                    #losses_list.append(celoss)   
-                    #wandb.log({"training/celoss" : celoss})
-
                     mseloss = MSEloss(st_cam * mask, gt_cam * mask)
+                    #mseloss = MSEloss(st_cam, gt_cam)
+                    #mseloss = SSIM()(st_cam, gt_cam)
                     if math.isnan(mseloss) is False:
                         losses_list.append(mseloss)
                     wandb.log({"training/mseloss" : mseloss})
-
+                    #print(f"mseloss: {MSEloss(st_cam, gt_cam)}")
+                    #print(f"maksed mseloss: {mseloss}")
 
                 t_loss = total_loss(losses_list)
                 wandb.log({"training/tloss" : t_loss})
 
-                mask = [ int(mask_s[i] and mask_p[i]) for i in range(gt_cam.size(0))]
-                if t_idx % 50 == 0:
-                    if mseloss > 0:
-                        print(mseloss)
-                        print(t_loss)
-                        print(mask)
-                    wandb.log({"training/mask" : mask})
-                del wk_prob
+                #mask = [ int(mask_p[i]) for i in range(gt_cam.size(0))]
+                #if t_idx % 50 == 0:
+                #    wandb.log({"training/mask" : mask})
 
+                self.optimizer.zero_grad()
                 self.scaler.scale(t_loss).backward()
                 self.scaler.step(self.optimizer)
-                self.scaler.update()                    
+                self.scaler.update()            
 
-                del wk_cam, st_cam, gt_cam
-
+                '''
+                for idx, module in enumerate(self.model.modules()):
+                    if idx == 470:
+                        y = module.weight.grad.data.detach().clone()
+                        y = y.detach().cpu().numpy()
+                        print(np.where(y != 0))
+                del image_ul, wk_image, st_image
+                '''
+                
+            top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
+            wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
+            
             self.adjust_learning_rate(epoch)
             self.save_ckpt(epoch)
             
@@ -478,7 +482,7 @@ if __name__ == "__main__":
     
     parser.add_argument('--batch-size-train', type=int, default=4,    
                         help='Batch size for train data (default: 16)')
-    parser.add_argument('--batch-size-val', type=int, default=16,
+    parser.add_argument('--batch-size-val', type=int, default=8,
                         help='Batch size for val data (default: 16)')
     parser.add_argument('--batch-size-test', type=int, default=4,
                         help='Batch size for test data (default: 16)')
