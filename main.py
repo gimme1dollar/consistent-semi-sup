@@ -12,7 +12,7 @@ import wandb, argparse
 from efficientnet_pytorch.model import EfficientNet
 from utils.losses import CEloss, total_loss
 from utils.visualize import *
-from itertools import cycle
+
 
 
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -26,6 +26,14 @@ imagenet_std = [0.229, 0.224, 0.225]
 
 data_path = pjn(os.getcwd(), "dataset", "DL20")
 
+def cycle(iterable):
+    iterator = iter(iterable)
+    while True:
+        try:
+            yield next(iterator)
+        except StopIteration:
+            iterator = iter(iterable)
+            
 def init(train_batch, val_batch, test_batch, args):
 
     # default augmentation functions : http://incredible.ai/pytorch/2020/04/25/Pytorch-Image-Augmentation/ 
