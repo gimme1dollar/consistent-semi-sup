@@ -204,8 +204,8 @@ class TrainManager(object):
         return (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
 
     def get_grad_cam(self, image):
-        #print()
         self.model.zero_grad()
+        self.model.eval()
         self.save_feat=[]
         #image = image.unsqueeze(0)
         s = self.model(image)[0]
@@ -239,7 +239,7 @@ class TrainManager(object):
         upscale_layer = torch.nn.Upsample(scale_factor=sf, mode='bilinear', align_corners=True)
         grad_CAM = upscale_layer(grad_CAM)
         grad_CAM = grad_CAM/torch.max(grad_CAM)
-        self.model.zero_grad()
+        self.model.train()
         return grad_CAM.squeeze()
         
     def train(self):
@@ -344,7 +344,7 @@ class TrainManager(object):
                 mask = [ torch.ones_like(gt_cam[0]) if int(mask_p[i]) else torch.zeros_like(gt_cam[0]) for i in range(gt_cam.size(0))]
                 mask = torch.stack(mask)
                 #print(f"mask size: {mask.size()}")
-
+                
                 self.optimizer.zero_grad()
                 with torch.cuda.amp.autocast():
                     mseloss = MSEloss(st_cam * mask, gt_cam * mask)
@@ -355,7 +355,7 @@ class TrainManager(object):
                     wandb.log({"training/mseloss" : mseloss})
                     #print(f"mseloss: {MSEloss(st_cam, gt_cam)}")
                     #print(f"maksed mseloss: {mseloss}")
-
+                
                 t_loss = total_loss(losses_list)
                 wandb.log({"training/tloss" : t_loss})
 
