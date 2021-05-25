@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.multiprocessing
 from torchvision import transforms, utils
-from dataset.dataloader import LoadDataset, IMDataset
+from dataset.dataloader import LoadDataset, LoadSemiDataset
 from tqdm import tqdm, tqdm_notebook
 from os.path import join as pjn
 import os.path, os, datetime, math, random, time
