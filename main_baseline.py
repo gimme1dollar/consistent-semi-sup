@@ -245,8 +245,6 @@ def main(args):
     model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20).cuda()
     model.set_swish(True)
     
-    wandb.watch(model)
-
     additional_cfg = {'device': None}
     additional_cfg['device'] = torch.device('cuda')
 
