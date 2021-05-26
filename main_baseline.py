@@ -166,10 +166,6 @@ class TrainManager(object):
                 wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
                 top1_acc_stu = top1_acc
 
-                top1_acc, top3_acc, top5_acc = self.validate(self.teacher ,self.add_cfg['device'])
-                wandb.log({"validation/teacher_top1_acc" : top1_acc, "validation/teacher_top3_acc" : top3_acc, "validation/teacher_top5_acc" : top5_acc})
-                top1_acc_t = top1_acc
-
             self.model.train()
 
             for idx, param_group in enumerate(self.optimizer.param_groups):
