@@ -1,24 +1,20 @@
-from torch.utils.data import Dataset, DataLoader
-import torch
-import torch.nn as nn
-import torch.multiprocessing
-from torchvision import transforms, utils
-from dataset.dataloader import LoadDataset, IMDataset
-from tqdm import tqdm, tqdm_notebook
-from os.path import join as pjn
-import os.path, os, datetime, math, random, time
-import numpy as np
-import wandb, argparse
 from efficientnet_pytorch.model import EfficientNet
-from utils.losses import CEloss, total_loss
-from utils.visualize import *
-
-
+import torch
+import torch.multiprocessing
+from torchvision import transforms
+from dataset.dataloader import LoadDataset, LoadSemiDataset
+from tqdm import tqdm
+from os.path import join as pjn
+import os.path, os, datetime, time
+import wandb, argparse
+from utils.losses import *
+#from utils.semi_sup import semi_sup_learning
+import math
+import warnings
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 warnings.filterwarnings(action='ignore')
 
-torch.multiprocessing.set_sharing_strategy('file_system')
 torch.backends.cudnn.benchmark = True
 
 imagenet_mean = [0.485, 0.456, 0.406]
@@ -33,9 +29,9 @@ def cycle(iterable):
             yield next(iterator)
         except StopIteration:
             iterator = iter(iterable)
-            
 
-def init(train_batch, val_batch, test_batch):#, imagenet_batch):
+def init(train_batch, val_batch, test_batch, args):
+
     # default augmentation functions : http://incredible.ai/pytorch/2020/04/25/Pytorch-Image-Augmentation/ 
     # for more augmentation functions : https://github.com/aleju/imgaug
 
@@ -70,7 +66,7 @@ def init(train_batch, val_batch, test_batch):#, imagenet_batch):
     )
 
     unlabel_loader = torch.utils.data.DataLoader(
-            dataset=unlabel_dataset, batch_size=train_batch,
+            dataset=unlabel_dataset, batch_size=4,
             num_workers=4, shuffle=True, pin_memory=True
     )
 
@@ -110,10 +106,9 @@ class TrainManager(object):
         self.val_loader = val_loader
         self.num_classes = num_classes
         self.upsampler = torch.nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True)
-        
 
-    def validate(self, loader, device, topk=(1,3,5)):
-        self.model.eval()
+    def validate(self, model, device, topk=(1,3,5)):
+        model.eval()
         total = 0
         maxk = max(topk)
         correct_1 = 0
@@ -121,13 +116,14 @@ class TrainManager(object):
         correct_5 = 0
 
         with torch.no_grad():
-            for b_idx, (image, labels) in tqdm(enumerate(loader), desc="validation", leave=False):
+            for b_idx, (image, labels) in tqdm(enumerate(self.val_loader), desc="validation", leave=False):
+                image = self.upsampler(image)
                 image = image.to(device)
                 labels = labels.to(device)
 
                 total += image.shape[0]
-                image = self.upsampler(image)
-                outputs = self.model(image) # b x 1
+                
+                outputs = model(image) # b x 1
 
                 _, pred = outputs.topk(maxk, 1, True, True)
                 pred = pred.t()
@@ -145,8 +141,8 @@ class TrainManager(object):
                         correct_5 += correct_k.item()
                     else:
                         raise NotImplementedError("Invalid top-k num")
-            
-                del image
+
+
         return (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
 
     def train(self):
@@ -161,13 +157,20 @@ class TrainManager(object):
         print("  Progress bar for training epochs:")
         end_epoch = self.args.start_epoch + self.args.num_epochs
 
-        unlabel_dataloader = iter(self.unlabel_loader)
-
+        unlabel_dataloader = iter(cycle(self.unlabel_loader))
+        alpha = 0.965
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
-            self.model.train()
-            if epoch >= 1:
-                top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
+
+            if epoch % 5 == 0:
+                top1_acc, top3_acc, top5_acc = self.validate(self.model, self.add_cfg['device'])
                 wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
+                top1_acc_stu = top1_acc
+
+                #top1_acc, top3_acc, top5_acc = self.validate(self.teacher ,self.add_cfg['device'])
+                #wandb.log({"validation/teacher_top1_acc" : top1_acc, "validation/teacher_top3_acc" : top3_acc, "validation/teacher_top5_acc" : top5_acc})
+                #top1_acc_t = top1_acc
+
+            self.model.train()
 
             for idx, param_group in enumerate(self.optimizer.param_groups):
                 avg_lr = param_group['lr']
@@ -179,7 +182,7 @@ class TrainManager(object):
                 target = target.to(self.add_cfg['device'])
 
                 image_ul = next(unlabel_dataloader)
-                image_ul = image_ul.to(self.add_cfg['device'])
+                image_ul = image_ul.to(self.add_cfg['device']) # DL20
 
                 self.optimizer.zero_grad()
                 losses_list = []
@@ -188,10 +191,8 @@ class TrainManager(object):
                     outputs = self.model(image)
                     celoss = CEloss(outputs, target)
                     losses_list.append(celoss)   
-
+                    
                 wandb.log({"training/celoss" : celoss})
-                if t_idx % 100:
-                    visualize_rescale_image(image, "training/image")
                     
                 t_loss = total_loss(losses_list)
                 self.scaler.scale(t_loss).backward()
@@ -243,9 +244,6 @@ def main(args):
     
     # bring effi model from this : https://github.com/lukemelas/EfficientNet-PyTorch
     model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20).cuda()
-    model.set_swish(True)
-    
-    wandb.watch(model)
 
     additional_cfg = {'device': None}
     additional_cfg['device'] = torch.device('cuda')
@@ -305,20 +303,20 @@ if __name__ == "__main__":
     parser.add_argument('--pretrained-ckpt', type=str, default=None,
                         help='Load pretrained weight, write path to weight (default: None)')
     
-    parser.add_argument('--batch-size-train', type=int, default=8,    
+    parser.add_argument('--batch-size-train', type=int, default=4,    
                         help='Batch size for train data (default: 16)')
-    parser.add_argument('--batch-size-val', type=int, default=16,
+    parser.add_argument('--batch-size-val', type=int, default=4,
                         help='Batch size for val data (default: 4)')
     parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 128)')
-    parser.add_argument('--ratio', type=float, default=0.02)
+    parser.add_argument('--ratio', type=float, default=0.125)
 
-    parser.add_argument('--save-ckpt', type=int, default=3,
+    parser.add_argument('--save-ckpt', type=int, default=5,
                         help='number of epoch save current weight? (default: 5)')
 
     parser.add_argument('--start-epoch', type=int, default=0,
                         help='start epoch (default: 0)')
-    parser.add_argument('--num-epochs', type=int, default=200,
+    parser.add_argument('--num-epochs', type=int, default=1200,
                         help='end epoch (default: 30)')
 
     parser.add_argument('--lr', type=float, default=1e-3,

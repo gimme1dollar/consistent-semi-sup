@@ -1,32 +1,39 @@
-from torch.utils.data import Dataset, DataLoader
-import torch
-import torch.nn as nn
-import torch.multiprocessing
-from torchvision import transforms, utils
-from dataset.dataloader import LoadDataset, IMDataset
-from tqdm import tqdm, tqdm_notebook
-from os.path import join as pjn
-import os.path, os, datetime, math, random, time
-import numpy as np
-import wandb, argparse
 from efficientnet_pytorch.model import EfficientNet
-from utils.losses import CEloss, total_loss, MSEloss, SSIM
+import torch
+import torch.multiprocessing
+from torchvision import transforms
+from dataset.dataloader import LoadDataset, LoadSemiDataset
+from tqdm import tqdm
+from os.path import join as pjn
+import os.path, os, datetime, time, random
+import wandb, argparse
+from utils.losses import *
 from utils.visualize import *
-from itertools import cycle
+#from utils.semi_sup import semi_sup_learning
+import math
+import warnings
 import torchvision.transforms.functional as F
 from typing import Callable
-import math
 
 torch.multiprocessing.set_sharing_strategy('file_system')
+warnings.filterwarnings(action='ignore')
+
 torch.backends.cudnn.benchmark = True
 
 imagenet_mean = [0.485, 0.456, 0.406]
 imagenet_std = [0.229, 0.224, 0.225]
 
 data_path = pjn(os.getcwd(), "dataset", "DL20")
-imagenet_data_path = pjn(os.getcwd(), "dataset", "ImageNet")
 
-def init(train_batch, val_batch, test_batch, imagenet_batch):
+def cycle(iterable):
+    iterator = iter(iterable)
+    while True:
+        try:
+            yield next(iterator)
+        except StopIteration:
+            iterator = iter(iterable)
+
+def init(train_batch, val_batch, test_batch, args):
 
     # default augmentation functions : http://incredible.ai/pytorch/2020/04/25/Pytorch-Image-Augmentation/ 
     # for more augmentation functions : https://github.com/aleju/imgaug
@@ -51,17 +58,18 @@ def init(train_batch, val_batch, test_batch, imagenet_batch):
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
     ])
 
-    transform_imagenet = transforms.Compose([
-        transforms.ToTensor()
-    ])
-
-    train_dataset = LoadDataset(data_path = data_path, transform=transform_train , mode='train')
+    label_dataset = LoadSemiDataset(data_path = data_path, transform=transform_train , mode='label', ratio=args.ratio)
+    unlabel_dataset = LoadSemiDataset(data_path = data_path, transform=transform_train , mode='unlabel', ratio=args.ratio)
     val_dataset = LoadDataset(data_path = data_path, transform=transform_val , mode='valid')
     test_dataset = LoadDataset(data_path = data_path, transform=transform_test , mode='test')
-    imagenet_dataset = IMDataset(data_path = imagenet_data_path, transform=transform_imagenet)
 
-    train_loader = torch.utils.data.DataLoader(
-            dataset=train_dataset, batch_size=train_batch,
+    label_loader = torch.utils.data.DataLoader(
+            dataset=label_dataset, batch_size=train_batch,
+            num_workers=4, shuffle=True, pin_memory=True
+    )
+
+    unlabel_loader = torch.utils.data.DataLoader(
+            dataset=unlabel_dataset, batch_size=4,
             num_workers=4, shuffle=True, pin_memory=True
     )
 
@@ -75,12 +83,7 @@ def init(train_batch, val_batch, test_batch, imagenet_batch):
             num_workers=4, shuffle=False, pin_memory=True
     )
 
-    imagenet_loader = torch.utils.data.DataLoader(
-            dataset=imagenet_dataset, batch_size=imagenet_batch,
-            num_workers=4, shuffle=True, pin_memory=True
-    )
-
-    return train_loader, val_loader, test_loader, imagenet_loader
+    return label_loader, unlabel_loader, val_loader, test_loader
     
 class TrainManager(object):
     def __init__(
@@ -89,24 +92,23 @@ class TrainManager(object):
             optimizer,
             args,
             additional_cfg,
-            train_loader,
+            label_loader,
+            unlabel_loader,
             val_loader,
-            test_loader,
-            imagenet_loader,
             scaler=None,
             num_classes=None,
             ):
         self.model = model
-        self.train_loader = train_loader
+        self.label_loader = label_loader
+        self.unlabel_loader = unlabel_loader
         self.optimizer = optimizer
         self.args = args
         self.add_cfg = additional_cfg
         self.tbx_wrtr_dir = additional_cfg.get('tbx_wrtr_dir')
         self.scaler = scaler
         self.val_loader = val_loader
-        self.imagenet_loader = imagenet_loader
         self.num_classes = num_classes
-        
+        self.upsampler = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
 
         self.save_feat=[]
         self.save_grad=[]
@@ -162,47 +164,6 @@ class TrainManager(object):
 
         return xl, yl, xr, yr
 
-    def validate(self, loader, device, topk=(1,3,5)):
-        self.model.eval()
-        total = 0
-        maxk = max(topk)
-        correct_1 = 0
-        correct_3 = 0
-        correct_5 = 0
-
-        upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
-        with torch.no_grad():
-            for b_idx, (image, labels) in tqdm(enumerate(loader), desc="validation", leave=False):
-                image = image.to(device)
-                image = upscale_layer(image)
-                labels = labels.to(device)
-
-                total += image.shape[0]
-
-                with torch.cuda.amp.autocast():
-                    outputs = self.model(image) # b x 1
-
-                _, pred = outputs.topk(maxk, 1, True, True)
-                pred = pred.t()
-                correct = (pred == labels.unsqueeze(dim=0)).expand_as(pred)
-
-                for k in topk:
-                    if k == 1:
-                        correct_k = correct[:1].reshape(-1).float().sum(0, keepdim=True)
-                        correct_1 += correct_k.item()
-                    elif k == 3:
-                        correct_k = correct[:3].reshape(-1).float().sum(0, keepdim=True)
-                        correct_3 += correct_k.item()
-                    elif k == 5:
-                        correct_k = correct[:5].reshape(-1).float().sum(0, keepdim=True)
-                        correct_5 += correct_k.item()
-                    else:
-                        raise NotImplementedError("Invalid top-k num")
-            
-            del image
-
-        return (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
-
     def get_grad_cam(self, image):
         self.model.zero_grad()
         self.model.eval()
@@ -241,63 +202,108 @@ class TrainManager(object):
         grad_CAM = grad_CAM/torch.max(grad_CAM)
         self.model.train()
         return grad_CAM.squeeze()
-        
+
+    def validate(self, model, device, topk=(1,3,5)):
+        model.eval()
+        total = 0
+        maxk = max(topk)
+        correct_1 = 0
+        correct_3 = 0
+        correct_5 = 0
+
+        with torch.no_grad():
+            for b_idx, (image, labels) in tqdm(enumerate(self.val_loader), desc="validation", leave=False):
+                image = self.upsampler(image)
+                image = image.to(device)
+                labels = labels.to(device)
+
+                total += image.shape[0]
+                
+                outputs = model(image) # b x 1
+
+                _, pred = outputs.topk(maxk, 1, True, True)
+                pred = pred.t()
+                correct = (pred == labels.unsqueeze(dim=0)).expand_as(pred)
+
+                for k in topk:
+                    if k == 1:
+                        correct_k = correct[:1].reshape(-1).float().sum(0, keepdim=True)
+                        correct_1 += correct_k.item()
+                    elif k == 3:
+                        correct_k = correct[:3].reshape(-1).float().sum(0, keepdim=True)
+                        correct_3 += correct_k.item()
+                    elif k == 5:
+                        correct_k = correct[:5].reshape(-1).float().sum(0, keepdim=True)
+                        correct_5 += correct_k.item()
+                    else:
+                        raise NotImplementedError("Invalid top-k num")
+
+
+        return (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
+
     def train(self):
         start = time.time()
         epoch = 0
-        iter_per_epoch = len(self.train_loader)
+        iter_per_epoch = len(self.label_loader)
         print("  iteration per epoch(considered batch size): ", iter_per_epoch)
+        print("  label iter : ", len(self.label_loader))
+        print("  unlabel iter : ", len(self.unlabel_loader))
+        print("  val iter : ", len(self.val_loader))
+        print("  image iter : ", len(self.unlabel_loader))
         print("  Progress bar for training epochs:")
         end_epoch = self.args.start_epoch + self.args.num_epochs
 
-        ## gradcam
-        p_cutoff = 0.90
-        dataloader = iter(zip(cycle(self.train_loader), cycle(self.imagenet_loader)))
-        upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
+        unlabel_dataloader = iter(cycle(self.unlabel_loader))
+        alpha = 0.965
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
+
+            if epoch % 5 == 0:
+                top1_acc, top3_acc, top5_acc = self.validate(self.model, self.add_cfg['device'])
+                wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
+                top1_acc_stu = top1_acc
+
+                #top1_acc, top3_acc, top5_acc = self.validate(self.teacher ,self.add_cfg['device'])
+                #wandb.log({"validation/teacher_top1_acc" : top1_acc, "validation/teacher_top3_acc" : top3_acc, "validation/teacher_top5_acc" : top5_acc})
+                #top1_acc_t = top1_acc
 
             for idx, param_group in enumerate(self.optimizer.param_groups):
                 avg_lr = param_group['lr']
                 wandb.log({str(idx)+"_lr": math.log10(avg_lr), 'epoch': epoch})
 
-            self.model.train()
-            for t_idx in tqdm(range(0, iter_per_epoch), desc='batch_iter', leave=False):
-                
-                sup, semisup = next(dataloader)
-
-                image, target = sup
-                image_ul = semisup
-
-                image = image.cuda()
-                image = upscale_layer(image)
-                target = target.cuda()
-
+            for t_idx, (image, target) in tqdm(enumerate(self.label_loader),  desc='batch_iter', leave=False, total=iter_per_epoch):
+                image = self.upsampler(image)
+                image = image.to(self.add_cfg['device']) # DL20
+                target = target.to(self.add_cfg['device'])
 
                 self.optimizer.zero_grad()
                 losses_list = []
                 with torch.cuda.amp.autocast():
+                    ### sup loss ###
                     outputs = self.model(image)
                     celoss = CEloss(outputs, target)
-                    losses_list.append(celoss)
-                    wandb.log({"training/celoss" : celoss})
-                if t_idx % 50 == 0:
-                    visualize_rescale_image(imagenet_mean, imagenet_std, image, "input_image/DL20")
-                
-                image_ul = image_ul.cuda()
-                image_ul = upscale_layer(image_ul)
+                    losses_list.append(celoss)   
+                wandb.log({"training/celoss" : celoss})
+
+                image_ul = next(unlabel_dataloader)
+                image_ul = image_ul.to(self.add_cfg['device']) # DL20
+                image_ul = self.upsampler(image_ul)
                 
                 ## Augmentation
                 wk_image = self.color_augmentation(0.1, image_ul)
                 wk_image = wk_image.cuda()
-                #print(f"wk_image size : {wk_image.size()}")
+                
+                wk_label = self.model(image_ul)
+                wk_prob = torch.softmax(wk_label, dim=-1)
+                max_probs, max_idx = torch.max(wk_prob, dim=-1)
+                mask_p = max_probs.ge(alpha).float()
+                mask_p = mask_p.cpu().detach().numpy()
 
                 i, j, h, w = self.get_crop_params(image_ul)
                 st_image = F.crop(image_ul, i, j, h, w)
                 st_image = self.color_augmentation(0.5, st_image)
                 st_image = self.resize_256_transform(st_image)
                 st_image = st_image.cuda()
-                #print(f"st_image size : {st_image.size()}")
-
+                
                 if t_idx % 50 == 0:
                     #visualize_rescale_image(imagenet_mean, imagenet_std, image_ul, "imagenet_org/imagenet")
                     visualize_rescale_image(imagenet_mean, imagenet_std, wk_image, "imagenet_wk/imagenet")
@@ -307,14 +313,12 @@ class TrainManager(object):
                 wk_cam = []
                 for img in wk_image:
                     img = img.unsqueeze(0)
-                    #img = upscale_layer(img)
                     wk_cam_ = self.get_grad_cam(img)
                     wk_cam.append(wk_cam_)
                 wk_cam = torch.stack(wk_cam)
-                #print(f"wk_cam size : {wk_cam.size()}")
                 if t_idx % 50 == 0:
-                    visualize_cam(wk_image, wk_cam, imagenet_mean, imagenet_std, "wk_cam/imagenet")    
-
+                    visualize_cam(wk_image, wk_cam, imagenet_mean, imagenet_std, "wk_cam/imagenet")   
+         
                 st_cam = []
                 for img in st_image:
                     img = img.unsqueeze(0)
@@ -322,64 +326,37 @@ class TrainManager(object):
                     st_cam_ = self.get_grad_cam(img)
                     st_cam.append(st_cam_)
                 st_cam = torch.stack(st_cam)
-                #print(f"st_cam size : {st_cam.size()}")
                 if t_idx % 50 == 0:       
                     visualize_cam(st_image, st_cam, imagenet_mean, imagenet_std, "st_cam/imagenet") 
 
                 gt_cam = F.crop(wk_cam, i, j, h, w)
                 gt_cam = self.resize_256_transform(gt_cam)
-                #print(f"gt_cam_resize size : {gt_cam.size()}")
                 if t_idx % 50 == 0:       
                     visualize_cam(st_image, gt_cam, imagenet_mean, imagenet_std, "gt_cam/imagenet")    
+                del wk_cam
                 
-
-                wk_label = self.model(image_ul)
-                wk_prob = torch.softmax(wk_label, dim=-1)
-                #print(f"wk_prob : {wk_prob}")
-                max_probs, max_idx = torch.max(wk_prob, dim=-1)
-                mask_p = max_probs.ge(p_cutoff).float()
-                mask_p = mask_p.cpu().detach().numpy()
-                #print(mask_p)
-                
+                ## Get gradcam_consistency_loss
                 mask = [ torch.ones_like(gt_cam[0]) if int(mask_p[i]) else torch.zeros_like(gt_cam[0]) for i in range(gt_cam.size(0))]
                 mask = torch.stack(mask)
-                #print(f"mask size: {mask.size()}")
                 
                 self.optimizer.zero_grad()
                 with torch.cuda.amp.autocast():
                     mseloss = MSEloss(st_cam * mask, gt_cam * mask)
-                    #mseloss = MSEloss(st_cam, gt_cam)
-                    #mseloss = SSIM()(st_cam, gt_cam)
                     if math.isnan(mseloss) is False:
                         losses_list.append(mseloss)
                     wandb.log({"training/mseloss" : mseloss})
-                    #print(f"mseloss: {MSEloss(st_cam, gt_cam)}")
-                    #print(f"maksed mseloss: {mseloss}")
                 
+
+                ## Train model
+                self.model.train()
                 t_loss = total_loss(losses_list)
                 wandb.log({"training/tloss" : t_loss})
 
-                #mask = [ int(mask_p[i]) for i in range(gt_cam.size(0))]
-                #if t_idx % 50 == 0:
-                #    wandb.log({"training/mask" : mask})
-
-                self.optimizer.zero_grad()
+                t_loss = total_loss(losses_list)
                 self.scaler.scale(t_loss).backward()
                 self.scaler.step(self.optimizer)
-                self.scaler.update()            
+                self.scaler.update()
 
-                '''
-                for idx, module in enumerate(self.model.modules()):
-                    if idx == 470:
-                        y = module.weight.grad.data.detach().clone()
-                        y = y.detach().cpu().numpy()
-                        print(np.where(y != 0))
-                del image_ul, wk_image, st_image
-                '''
-                
-            top1_acc, top3_acc, top5_acc = self.validate(self.val_loader, self.add_cfg['device'])
-            wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
-            
             self.adjust_learning_rate(epoch)
             self.save_ckpt(epoch)
             
@@ -415,24 +392,26 @@ def main(args):
     # torch.manual_seed(args.seed)
     # torch.cuda.manual_seed(args.seed)
     # torch.cuda.manual_seed_all(args.seed) # if use multi-GPU
-    # torch.backends.cudnn.deterministic = False
+    #torch.backends.cudnn.deterministic = False
     # np.random.seed(args.seed)
     # random.seed(args.seed)
+    torch.backends.cudnn.benchmark = True
 
     wandb.init(project="DL20")
     orig_cwd = os.getcwd()
     
     # bring effi model from this : https://github.com/lukemelas/EfficientNet-PyTorch
-    model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20)
-    wandb.watch(model)
+    model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20).cuda()
 
     additional_cfg = {'device': None}
     additional_cfg['device'] = torch.device('cuda')
 
-    model = model.cuda()
+    trainable_params = [
+        {'params': list(filter(lambda p:p.requires_grad, model.parameters())), 'lr':args.lr},
+    ]
 
     optimizer = torch.optim.SGD(
-        model.parameters(),
+        trainable_params,
         lr=args.lr,
         weight_decay=args.weight_decay,
         momentum=0.9)
@@ -451,11 +430,14 @@ def main(args):
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.cuda()
-    now = datetime.datetime.now()
-    additional_cfg['tbx_wrtr_dir'] = os.getcwd() + "/checkpoints/" + str(now.strftime('%Y-%m-%d-%H-%M-%S'))
 
-    train_loader, val_loader, test_loader, imagenet_loader = init(
-        args.batch_size_train, args.batch_size_val, args.batch_size_test, args.batch_size_imagenet
+    now = datetime.datetime.now()
+    ti = str(now.strftime('%Y-%m-%d-%H-%M-%S'))
+    additional_cfg['tbx_wrtr_dir'] = os.getcwd() + "/checkpoints/" + str(ti)
+
+    wandb.run.name = str(ti)
+    label_loader, unlabel_loader, val_loader, _ = init(
+        args.batch_size_train, args.batch_size_val, args.batch_size_test, args
     )
 
     trainer = TrainManager(
@@ -463,10 +445,9 @@ def main(args):
         optimizer,
         args,
         additional_cfg,
-        train_loader=train_loader,
+        label_loader=label_loader,
+        unlabel_loader=unlabel_loader,
         val_loader=val_loader,
-        test_loader=test_loader,
-        imagenet_loader=imagenet_loader,
         scaler=scaler,
         num_classes=20
     )
@@ -482,26 +463,25 @@ if __name__ == "__main__":
     
     parser.add_argument('--batch-size-train', type=int, default=4,    
                         help='Batch size for train data (default: 16)')
-    parser.add_argument('--batch-size-val', type=int, default=8,
-                        help='Batch size for val data (default: 16)')
-    parser.add_argument('--batch-size-test', type=int, default=4,
-                        help='Batch size for test data (default: 16)')
-    parser.add_argument('--batch-size-imagenet', type=int, default=4,
+    parser.add_argument('--batch-size-val', type=int, default=4,
+                        help='Batch size for val data (default: 4)')
+    parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 128)')
+    parser.add_argument('--ratio', type=float, default=0.125)
 
-    parser.add_argument('--save-ckpt', type=int, default=10,
+    parser.add_argument('--save-ckpt', type=int, default=5,
                         help='number of epoch save current weight? (default: 5)')
 
     parser.add_argument('--start-epoch', type=int, default=0,
                         help='start epoch (default: 0)')
-    parser.add_argument('--num-epochs', type=int, default=100,
+    parser.add_argument('--num-epochs', type=int, default=1200,
                         help='end epoch (default: 30)')
 
     parser.add_argument('--lr', type=float, default=1e-3,
                         help='Initial learning rate (default: 0.001)')
     parser.add_argument('--weight-decay', type=float, default=1e-5,
                         help='Weight decay for SGD (default: 0.0005)')
-    parser.add_argument('--lr-anneal-rate', type=float, default=0.95,
+    parser.add_argument('--lr-anneal-rate', type=float, default=0.995,
                         help='Annealing rate (default: 0.95)')
     
 
