@@ -12,7 +12,7 @@ from utils.visualize import *
 #from utils.semi_sup import semi_sup_learning
 import math
 import warnings
-import torchvision.transforms.functional as F
+import torchvision.transforms.functional as VF
 from typing import Callable
 
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -24,6 +24,104 @@ imagenet_mean = [0.485, 0.456, 0.406]
 imagenet_std = [0.229, 0.224, 0.225]
 
 data_path = pjn(os.getcwd(), "dataset", "DL20")
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from tqdm import tqdm
+
+class ActivationsAndGradients:
+    """ Class for extracting activations and
+    registering gradients from targetted intermediate layers """
+    def __init__(self, model, target_layer, reshape_transform):
+        self.model = model
+        self.gradients = None
+        self.activations = None
+        self.reshape_transform = reshape_transform
+        target_layer.register_forward_hook(self.save_activation)
+        target_layer.register_backward_hook(self.save_gradient)
+
+    def save_activation(self, module, input, output):
+        self.activations = torch.squeeze(output)
+
+    def save_gradient(self, module, grad_input, grad_output):
+        self.gradients = torch.squeeze(grad_output[0])
+    
+    def clear_list(self):
+        del self.gradients
+        torch.cuda.empty_cache()
+        self.gradients = None
+    
+    def buffer_clear(self):
+        del self.gradients, self.activations
+        torch.cuda.empty_cache()
+        self.gradients = None
+        self.activations = None
+    def __call__(self, x):
+        self.gradients = None
+        self.activations = None       
+        return self.model(x)
+
+class GradCAM:
+    def __init__(self, 
+                 model, 
+                 target_layer,
+                 use_cuda=True,
+                 reshape_transform=None):
+        self.model = model
+        self.target_layer = target_layer
+        self.cuda = use_cuda
+        if self.cuda:
+            self.model = model.cuda()
+        self.reshape_transform = reshape_transform
+        self.activations_and_grads = ActivationsAndGradients(self.model, 
+            target_layer, reshape_transform)
+        self.upscale_layer = torch.nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+            
+        
+    def forward(self, input_img):
+        return self.model(input_img)
+    
+    def buffer_clear(self):
+        self.activations_and_grads.buffer_clear()
+
+    def __call__(self, input_tensor, expand):
+        # input_tensor : b x c x h x w
+        self.buffer_clear()
+        self.model.eval()
+        
+        cam_stack=[]    
+        for batch_idx in tqdm(range(input_tensor.shape[0]), desc='cam_calc', leave=False): # batch 개
+            self.model.zero_grad()
+            output = self.activations_and_grads(input_tensor[batch_idx].unsqueeze(0)) # 1 x c x h x w
+
+            y_c = output[batch_idx, torch.argmax(output)] #arg_max # h x w ; GAP over channel
+            y_c.backward(retain_graph=True) 
+            activations = self.activations_and_grads.activations
+            grads = self.activations_and_grads.gradients
+            self.buffer_clear()
+            weights = torch.mean(grads, dim=(1, 2), keepdim=True)
+            cam = torch.sum(weights * activations, dim=0)
+
+            cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), size=expand.size()[2:], mode='bilinear', align_corners=True)
+
+            min_v = torch.min(cam)
+            range_v = torch.max(cam) - min_v
+            if range_v > 0:
+                cam = (cam - min_v) / range_v
+            else:
+                cam = torch.zeros(cam.size())
+            cam_stack.append(cam.cuda())
+            
+            self.activations_and_grads.clear_list()
+            del y_c, activations, grads, weights, cam, output
+            torch.cuda.empty_cache()
+        concated_cam = torch.cat(cam_stack, dim=0).squeeze() # b x 5 x h x w
+        del cam_stack, input_tensor
+        torch.cuda.empty_cache()
+        self.model.train()
+        self.buffer_clear()
+        return concated_cam
 
 def cycle(iterable):
     iterator = iter(iterable)
@@ -110,13 +208,12 @@ class TrainManager(object):
         self.num_classes = num_classes
         self.upsampler = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
 
-        self.save_feat=[]
-        self.save_grad=[]
         for idx, module in enumerate(self.model.modules()):
             #if idx > 200:
             #    print(idx, module)
             if idx == 479:
-                module.register_forward_hook(self.save_outputs_hook())
+                target_layer = module
+        self.get_cam = GradCAM(model=self.model, target_layer=target_layer, use_cuda=False)
 
         self.to_tensor_transform = transforms.Compose([
             transforms.ToTensor()
@@ -163,45 +260,6 @@ class TrainManager(object):
             yr = random.randint(yl, h_)
 
         return xl, yl, xr, yr
-
-    def get_grad_cam(self, image):
-        self.model.zero_grad()
-        self.model.eval()
-        self.save_feat=[]
-        #image = image.unsqueeze(0)
-        s = self.model(image)[0]
-
-        self.save_grad=[]
-        self.save_feat[0].register_hook(self.save_grad_hook())
-        #print(f"save_feat size: {np.shape(self.save_feat[0])}")
-
-        y = torch.argmax(s).item()
-        s_y = s[y]
-        s_y.backward(retain_graph=True)
-        #print(f"save_grad size: {np.shape(self.save_grad[0][0])}")
-        
-        gap_layer = torch.nn.AdaptiveAvgPool2d(1)
-        alpha = gap_layer(self.save_grad[0][0])
-        #print(f"alpha size: {alpha.size()}")
-        A = self.save_feat[0]
-        A = A.squeeze()
-        #print(f"A size: {A.size()}")
-
-        weighted_sum = torch.sum(alpha*A, dim=0)
-        relu_layer = torch.nn.ReLU()
-        grad_CAM = relu_layer(weighted_sum)
-        grad_CAM = grad_CAM.unsqueeze(0)
-        grad_CAM = grad_CAM.unsqueeze(0)
-        #print(f"grad_CAM size: {grad_CAM.size()}")
-
-        #sf = image.shape[-1]/grad_CAM.shape[-1]
-        sf = 32
-        #return 1
-        upscale_layer = torch.nn.Upsample(scale_factor=sf, mode='bilinear', align_corners=True)
-        grad_CAM = upscale_layer(grad_CAM)
-        grad_CAM = grad_CAM/torch.max(grad_CAM)
-        self.model.train()
-        return grad_CAM.squeeze()
 
     def validate(self, model, device, topk=(1,3,5)):
         model.eval()
@@ -255,6 +313,7 @@ class TrainManager(object):
 
         unlabel_dataloader = iter(cycle(self.unlabel_loader))
         alpha = 0.965
+        p_cutoff = 0.80
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
 
             if epoch % 5 == 0:
@@ -295,11 +354,11 @@ class TrainManager(object):
                 wk_label = self.model(image_ul)
                 wk_prob = torch.softmax(wk_label, dim=-1)
                 max_probs, max_idx = torch.max(wk_prob, dim=-1)
-                mask_p = max_probs.ge(alpha).float()
+                mask_p = max_probs.ge(p_cutoff).float()
                 mask_p = mask_p.cpu().detach().numpy()
 
                 i, j, h, w = self.get_crop_params(image_ul)
-                st_image = F.crop(image_ul, i, j, h, w)
+                st_image = VF.crop(image_ul, i, j, h, w)
                 st_image = self.color_augmentation(0.5, st_image)
                 st_image = self.resize_256_transform(st_image)
                 st_image = st_image.cuda()
@@ -313,7 +372,7 @@ class TrainManager(object):
                 wk_cam = []
                 for img in wk_image:
                     img = img.unsqueeze(0)
-                    wk_cam_ = self.get_grad_cam(img)
+                    wk_cam_ = self.get_cam(img, img)
                     wk_cam.append(wk_cam_)
                 wk_cam = torch.stack(wk_cam)
                 if t_idx % 50 == 0:
@@ -323,13 +382,13 @@ class TrainManager(object):
                 for img in st_image:
                     img = img.unsqueeze(0)
                     #img = upscale_layer(img)
-                    st_cam_ = self.get_grad_cam(img)
+                    st_cam_ = self.get_cam(img, img)
                     st_cam.append(st_cam_)
                 st_cam = torch.stack(st_cam)
                 if t_idx % 50 == 0:       
                     visualize_cam(st_image, st_cam, imagenet_mean, imagenet_std, "st_cam/imagenet") 
 
-                gt_cam = F.crop(wk_cam, i, j, h, w)
+                gt_cam = VF.crop(wk_cam, i, j, h, w)
                 gt_cam = self.resize_256_transform(gt_cam)
                 if t_idx % 50 == 0:       
                     visualize_cam(st_image, gt_cam, imagenet_mean, imagenet_std, "gt_cam/imagenet")    
