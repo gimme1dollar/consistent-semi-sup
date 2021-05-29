@@ -1,3 +1,5 @@
+# reference git repository: https://github.com/sthalles/SimCLR.git
+
 import logging
 import os
 import sys

@@ -1,8 +1,10 @@
+# reference git repository: https://github.com/sthalles/SimCLR.git
+
 from torchvision.transforms import transforms
 from data_aug.gaussian_blur import GaussianBlur
 from torchvision import transforms, datasets
 from data_aug.view_generator import ContrastiveLearningViewGenerator
-from exceptions.exceptions import InvalidDatasetSelection
+# from exceptions.exceptions import InvalidDatasetSelection
 
 
 class ContrastiveLearningDataset:

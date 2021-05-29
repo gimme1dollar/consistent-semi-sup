@@ -1,3 +1,5 @@
+# reference git repository: https://github.com/sthalles/SimCLR.git
+
 import numpy as np
 
 np.random.seed(0)
