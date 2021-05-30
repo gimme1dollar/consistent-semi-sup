@@ -47,12 +47,12 @@ python3 main.py --pretrained-ckpt="./YOUR_PATH/baseline.pth"
 1. train model supervised manner using some labeled data (ratio: 0.125, 0.5 ...)    
    - model weight (ratio=0.125): https://drive.google.com/file/d/1DBbRu9QtTPLEJZw3hxRqtWfAZHdKmUGl/view?usp=sharing
 2. generate pseudo label about unlabeled data with trained model (Refer 0.125_unlabel_path_list2.txt)
-    ex) each line consist of unlabeled-datapath & psuedo-label
+    ex) each line consist of unlabeled-datapath & pseudo-label
 3. training simclr using pseudo label: python3 z_semi_kam_run.py
    - model weight from scratch (ratio=0.125): https://drive.google.com/file/d/1BaFniMByJL7Rn5HXLSWYK1Y3GnPIuLcc/view?usp=sharing
 4. linear evaluation: python z_semi_kam_eval.py
    - model weight from scratch (ratio=0.125): https://drive.google.com/file/d/17AkXgDZK4Fy_s6TgRaFXm5KD985E1y5g/view?usp=sharing
-   
+
 ## Basic informations about framework
 ### backbone : efficientnet-b04 
 
