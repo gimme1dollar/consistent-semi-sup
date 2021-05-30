@@ -11,71 +11,6 @@ import random
 from utils.visualize import *
 import copy
 
-class JSD(nn.Module):
-    
-    def __init__(self):
-        super(JSD, self).__init__()
-    
-    def forward(self, net_1_logits, net_2_logits):
-        net_1_probs =  F.softmax(net_1_logits, dim=1)
-        net_2_probs=  F.softmax(net_2_logits, dim=1)
-
-        total_m = 0.5 * (net_1_probs + net_1_probs)
-        loss = 0.0
-        loss += F.kl_div(F.log_softmax(net_1_logits, dim=1), total_m, reduction="batchmean") 
-        loss += F.kl_div(F.log_softmax(net_2_logits, dim=1), total_m, reduction="batchmean") 
-     
-        return (0.5 * loss)
-
-def bhattacharyya_coefficient(a, b):
-    # a, b : num_classes
-    a = torch.sigmoid(a.squeeze())
-    b = torch.sigmoid(b.squeeze())
-
-    score = 0
-    for i in range(a.shape[0]):
-        score += torch.sqrt(a[i] * b[i])
-
-    return 1 - score
-
-class ContrastiveLoss(nn.Module):
-    """
-    Contrastive loss
-    Takes embeddings of two samples and a target label == 1 if samples are from the same class and label == 0 otherwise
-    """
-    def __init__(self, margin=1.0):
-        super(ContrastiveLoss, self).__init__()
-        self.margin = margin
-        self.eps = 1e-9
-
-    def forward(self, output1, output2, target, size_average=True):
-        distances = (output2 - output1).pow(2).sum(1)  # squared distances
-        losses = 0.5 * (target.float() * distances +
-                        (1 + -1 * target).float() * F.relu(self.margin - (distances + self.eps).sqrt()).pow(2))
-        return losses.mean() if size_average else losses.sum()
-
-def constrative_loss(div1_origin, div2_new, target):
-    cons_loss = ContrastiveLoss()(div1_origin, div2_new, target.cuda())
-    return cons_loss
-
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2, alpha=None, size_average=True):
-        super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.size_average = size_average
-        self.CE_loss = nn.CrossEntropyLoss(reduce=False, weight=alpha)
-
-    def forward(self, output, target):
-        logpt = self.CE_loss(output, target.long())
-        pt = torch.exp(-logpt)
-        loss = ((1-pt)**self.gamma) * logpt
-        if self.size_average:
-            return loss.mean()
-        return loss.sum()
-
-def focal_loss(x, y):
-    return FocalLoss()(x, y)
-
 def CEloss(inputs, gt, ignore_index=255):
     return nn.CrossEntropyLoss(ignore_index=ignore_index)(inputs, gt)
 
@@ -115,12 +50,11 @@ def cosine_loss(x1, x2, y):
     wandb.log({"training/diff_avg_loss" : nm}, commit=False)
     return pm, nm
 
-def triplet_loss(model, image, target):
+def triplet_loss(image, target, anc_vector):
 
     tp_loss = nn.TripletMarginWithDistanceLoss(distance_function=nn.PairwiseDistance())
     loss = 0
-    pos_mean = 0
-    neg_mean = 0
+
     for oidx in range(image.shape[0]):
         pos_list = []
         neg_list = []
@@ -136,51 +70,91 @@ def triplet_loss(model, image, target):
         p1 = random.sample(pos_list, min_range)
         n1 = random.sample(neg_list, min_range)
         
-        _, anc_vector = model(image[oidx].unsqueeze(0))
-        _, pos_vector = model(image[p1])
-        _, neg_vector = model(image[n1])
-        pm = torch.pairwise_distance(anc_vector, pos_vector).mean()
-        pos_mean += pm
-
-        nm = torch.pairwise_distance(anc_vector, neg_vector).mean()
-        neg_mean += nm
-        loss += tp_loss(anc_vector, pos_vector, neg_vector)
+        loss += tp_loss(anc_vector[oidx], anc_vector[p1], anc_vector[n1])
 
     loss = loss / (image.shape[0])
     wandb.log({"training/triplet_loss":loss})
-
-    pm = pos_mean / (image.shape[0])
-    nm = neg_mean / (image.shape[0])
-    return loss, pm, nm
-
-def unsup_do(model, image, image_ul, th):
-    tp_loss = nn.TripletMarginWithDistanceLoss(distance_function=nn.PairwiseDistance())
-    loss = 0
-    
-    for oidx in range(image.shape[0]):
-        
-        dl20_output, anc_vec = model(image[oidx].unsqueeze(0))
-        imgnet_output, tar_vec = model(image_ul)
-
-        dist = torch.pairwise_distance(anc_vec, tar_vec)
-        label = torch.where(dist <= (th * 1.5), 1,0)
-        
-        pos_list = []
-        neg_list = []
-        for iidx in range(label.shape[0]):
-            if label[iidx] == 1: # positive
-                pos_list.append(iidx)
-            else:
-                neg_list.append(iidx)
-            
-        min_range = min(len(pos_list), len(neg_list))
-        p1 = random.sample(pos_list, min_range)
-        n1 = random.sample(neg_list, min_range)
-
-        loss += tp_loss(anc_vec, tar_vec[p1], tar_vec[n1])
-
-    loss = loss / (image.shape[0])
-    
-    wandb.log({"semi/triplet_loss":loss})
     return loss
 
+
+def softmax_kl_loss(input_logits, target_logits):
+    input_log_softmax = F.log_softmax(input_logits, dim=0)
+    target_softmax = F.softmax(target_logits, dim=0)
+    return F.kl_div(input_log_softmax, target_softmax, size_average=False)
+
+def entropy_loss(ul_y):
+    p = F.softmax(ul_y, dim=1)
+    return -(p*F.log_softmax(ul_y, dim=1)).sum(dim=1).mean(dim=0)
+
+class SmoothCrossEntropy(nn.Module):
+    def __init__(self, alpha=0.1):
+        super(SmoothCrossEntropy, self).__init__()
+        self.alpha = alpha
+
+    def forward(self, logits, labels):
+        num_classes = logits.shape[-1]
+        alpha_div_k = self.alpha / num_classes
+        target_probs = F.one_hot(labels, num_classes=num_classes).float() * \
+            (1. - self.alpha) + alpha_div_k
+        loss = -(target_probs * torch.log_softmax(logits, dim=-1)).sum(dim=-1)
+        return loss.mean()
+
+
+# bring code from https://github.com/jik0730/VAT-pytorch
+class VAT(nn.Module):
+    """
+    We define a function of regularization, specifically VAT.
+    """
+
+    def __init__(self, model, n_power, XI, eps):
+        super(VAT, self).__init__()
+        self.model = model
+        self.n_power = n_power
+        self.XI = XI
+        self.epsilon = eps
+
+    def forward(self, X, logit):
+        vat_loss = virtual_adversarial_loss(X, logit, self.model, self.n_power,
+                                            self.XI, self.epsilon)
+        return vat_loss  # already averaged
+
+
+def kl_divergence_with_logit(q_logit, p_logit):
+    q = F.softmax(q_logit, dim=1)
+    qlogq = torch.mean(torch.sum(q * F.log_softmax(q_logit, dim=1), dim=1))
+    qlogp = torch.mean(torch.sum(q * F.log_softmax(p_logit, dim=1), dim=1))
+    return qlogq - qlogp
+
+
+def get_normalized_vector(d):
+    d_abs_max = torch.max(
+        torch.abs(d.view(d.size(0), -1)), 1, keepdim=True)[0].view(
+            d.size(0), 1, 1, 1)
+    # print(d_abs_max.size())
+    d /= (1e-12 + d_abs_max)
+    d /= torch.sqrt(1e-6 + torch.sum(
+        torch.pow(d, 2.0), tuple(range(1, len(d.size()))), keepdim=True))
+    return d
+
+
+def generate_virtual_adversarial_perturbation(x, logit, model, n_power, XI,
+                                              epsilon):
+    d = torch.randn_like(x)
+
+    for _ in range(n_power):
+        d = XI * get_normalized_vector(d).requires_grad_()
+        logit_m = model(x + d)
+        dist = kl_divergence_with_logit(logit, logit_m)
+        grad = torch.autograd.grad(dist, [d])[0]
+        d = grad.detach()
+
+    return epsilon * get_normalized_vector(d)
+
+
+def virtual_adversarial_loss(x, logit, model, n_power, XI, epsilon):
+    r_vadv = generate_virtual_adversarial_perturbation(x, logit, model,
+                                                       n_power, XI, epsilon)
+    logit_p = logit.detach()
+    logit_m = model(x + r_vadv)
+    loss = kl_divergence_with_logit(logit_p, logit_m)
+    return loss

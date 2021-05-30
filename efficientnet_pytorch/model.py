@@ -35,12 +35,10 @@ VALID_MODELS = (
 
 class MBConvBlock(nn.Module):
     """Mobile Inverted Residual Bottleneck Block.
-
     Args:
         block_args (namedtuple): BlockArgs, defined in utils.py.
         global_params (namedtuple): GlobalParam, defined in utils.py.
         image_size (tuple or list): [image_height, image_width].
-
     References:
         [1] https://arxiv.org/abs/1704.04861 (MobileNet v1)
         [2] https://arxiv.org/abs/1801.04381 (MobileNet v2)
@@ -90,11 +88,9 @@ class MBConvBlock(nn.Module):
 
     def forward(self, inputs, drop_connect_rate=None):
         """MBConvBlock's forward function.
-
         Args:
             inputs (tensor): Input tensor.
             drop_connect_rate (bool): Drop connect rate (float, between 0 and 1).
-
         Returns:
             Output of this block after processing.
         """
@@ -133,7 +129,6 @@ class MBConvBlock(nn.Module):
 
     def set_swish(self, memory_efficient=True):
         """Sets swish function as memory efficient (for training) or standard (for export).
-
         Args:
             memory_efficient (bool): Whether to use memory-efficient version of swish.
         """
@@ -143,14 +138,11 @@ class MBConvBlock(nn.Module):
 class EfficientNet(nn.Module):
     """EfficientNet model.
        Most easily loaded with the .from_name or .from_pretrained methods.
-
     Args:
         blocks_args (list[namedtuple]): A list of BlockArgs to construct blocks.
         global_params (namedtuple): A set of GlobalParams shared between blocks.
-
     References:
         [1] https://arxiv.org/abs/1905.11946 (EfficientNet)
-
     Example:
         >>> import torch
         >>> from efficientnet.model import EfficientNet
@@ -214,25 +206,12 @@ class EfficientNet(nn.Module):
         if self._global_params.include_top:
             self._dropout = nn.Dropout(self._global_params.dropout_rate)
             self._fc = nn.Linear(out_channels, self._global_params.num_classes)
-        
-        self.classifier = nn.Sequential(
-            nn.Conv2d(1792, 1792, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(1792, 20, kernel_size=1)
-        )
-
-        self.projector = nn.Sequential(
-            nn.Conv2d(1792, 1792, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(1792, 512, kernel_size=1)
-        )
 
         # set activation to memory efficient swish by default
         self._swish = MemoryEfficientSwish()
 
     def set_swish(self, memory_efficient=True):
         """Sets swish function as memory efficient (for training) or standard (for export).
-
         Args:
             memory_efficient (bool): Whether to use memory-efficient version of swish.
         """
@@ -243,10 +222,8 @@ class EfficientNet(nn.Module):
     def extract_endpoints(self, inputs):
         """Use convolution layer to extract features
         from reduction levels i in [1, 2, 3, 4, 5].
-
         Args:
             inputs (tensor): Input tensor.
-
         Returns:
             Dictionary of last intermediate features
             with reduction levels i in [1, 2, 3, 4, 5].
@@ -289,10 +266,8 @@ class EfficientNet(nn.Module):
 
     def extract_features(self, inputs):
         """use convolution layer to extract feature .
-
         Args:
             inputs (tensor): Input tensor.
-
         Returns:
             Output of the final convolution
             layer in the efficientnet model.
@@ -315,31 +290,24 @@ class EfficientNet(nn.Module):
     def forward(self, inputs):
         """EfficientNet's forward function.
            Calls extract_features to extract features, applies final linear layer, and returns logits.
-
         Args:
             inputs (tensor): Input tensor.
-
         Returns:
             Output of this model after processing.
         """
         # Convolution layers
         x = self.extract_features(inputs)
-        proj = self.projector(x) # b x 512 x 2 x 2
-        x = nn.MaxPool2d(2,2)(x)
         # Pooling and final linear layer
-        # x = self._avg_pooling(x)
-        # if self._global_params.include_top:
-        #     x = x.flatten(start_dim=1)
-        #     x = self._dropout(x)
-        #     x = self._fc(x)
-        cls = self.classifier(x) # b x 20 x 1 x 1
-        
-        return cls.squeeze(), proj.flatten(1) 
+        x = self._avg_pooling(x)
+        if self._global_params.include_top:
+            x = x.flatten(start_dim=1)
+            x = self._dropout(x)
+            x = self._fc(x)
+        return x
 
     @classmethod
     def from_name(cls, model_name, in_channels=3, **override_params):
         """Create an efficientnet model according to name.
-
         Args:
             model_name (str): Name for efficientnet.
             in_channels (int): Input data's channel number.
@@ -351,7 +319,6 @@ class EfficientNet(nn.Module):
                     'num_classes', 'batch_norm_momentum',
                     'batch_norm_epsilon', 'drop_connect_rate',
                     'depth_divisor', 'min_depth'
-
         Returns:
             An efficientnet model.
         """
@@ -365,7 +332,6 @@ class EfficientNet(nn.Module):
     def from_pretrained(cls, model_name, weights_path=None, advprop=False,
                         in_channels=3, num_classes=20, **override_params):
         """Create an efficientnet model according to name.
-
         Args:
             model_name (str): Name for efficientnet.
             weights_path (None or str):
@@ -386,7 +352,6 @@ class EfficientNet(nn.Module):
                     'batch_norm_momentum',
                     'batch_norm_epsilon', 'drop_connect_rate',
                     'depth_divisor', 'min_depth'
-
         Returns:
             A pretrained efficientnet model.
         """
@@ -399,10 +364,8 @@ class EfficientNet(nn.Module):
     @classmethod
     def get_image_size(cls, model_name):
         """Get the input image size for a given efficientnet model.
-
         Args:
             model_name (str): Name for efficientnet.
-
         Returns:
             Input image size (resolution).
         """
@@ -413,10 +376,8 @@ class EfficientNet(nn.Module):
     @classmethod
     def _check_model_name_is_valid(cls, model_name):
         """Validates model name.
-
         Args:
             model_name (str): Name for efficientnet.
-
         Returns:
             bool: Is a valid name or not.
         """
@@ -425,7 +386,6 @@ class EfficientNet(nn.Module):
 
     def _change_in_channels(self, in_channels):
         """Adjust model's first convolution layer to in_channels, if in_channels not equals 3.
-
         Args:
             in_channels (int): Input data's channel number.
         """

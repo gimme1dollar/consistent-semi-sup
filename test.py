@@ -56,6 +56,8 @@ class TrainManager(object):
         
 
     def validate(self):
+        upscale_layer = torch.nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True)
+
         self.model.eval()
         with open(self.args.exp_name + "_test.csv", "w") as f:
             f.write("Id"+","+"Category" + '\n')
@@ -64,7 +66,8 @@ class TrainManager(object):
                     path = path[0].split("/")[-1]
                     path = path.split('.')[0]
                     image = image.cuda()
-                    outputs, _= self.model(image)
+                    image = upscale_layer(image)
+                    outputs = self.model(image)
                     f.write(str(path) + ","+ str(outputs.argmax().item()) + '\n')
 
 def main(args):

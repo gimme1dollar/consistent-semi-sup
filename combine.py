@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 from efficientnet_pytorch import EfficientNet
+from efficientnet_pytorch.utils import Conv2dDynamicSamePadding
 
 def make_layers_vgg(cfg, in_ch=3, use_batch_norm=False):
     """
@@ -57,3 +58,17 @@ class vgg16_cnn(nn.Module):
         x = self.conv4_features(x)
         x = self.conv5_features(x)
         return x.flatten(1) # b x 512 x 2 x 2
+
+class modified_effinet(nn.Module):
+    def __init__(self):
+        super(modified_effinet, self).__init__()
+        self.bce_model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=1)
+        self.bce_model._conv_stem = Conv2dDynamicSamePadding(
+            6, 48, kernel_size=(3, 3), stride=(2, 2), bias=False)
+
+    def forward(self, x1, x2=None):
+        if x2 is not None:
+            x = torch.cat([x1, x2], dim=1)
+        elif x1.shape[1] == 6:
+            x = x1
+        return self.bce_model(x)
