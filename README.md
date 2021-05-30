@@ -44,12 +44,11 @@ download baseline weights : https://drive.google.com/file/d/158uepP38iGlZ_UKCL6P
 python3 main.py --pretrained-ckpt="./YOUR_PATH/baseline.pth"
 
 ## For pseudo simclr 
-
-### First, prepare psuedo labeling file 
-1. train model supervised manner using some labeled data(ratio: 0.125, 0.5 ...)
-2. using trained model, generate pseudo label about unlabeled data (Refer 0.125_unlabel_path_list2.txt)
+1. train model supervised manner using some labeled data (ratio: 0.125, 0.5 ...)
+2. generate pseudo label about unlabeled data with trained model (Refer 0.125_unlabel_path_list2.txt)
     ex) each line consist of unlabeled-datapath & psuedo-label
 3. training simclr using pseudo label: python3 z_semi_kam_run.py 
+4. linear evaluation: python z_semi_kam_eval.py
 
 ## Basic informations about framework
 ### backbone : efficientnet-b04 
