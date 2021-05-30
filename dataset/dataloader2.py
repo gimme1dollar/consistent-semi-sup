@@ -239,3 +239,62 @@ class LoadSemiDataset3(Dataset):
         img2 = self.transform(img2)
         return img, img2, label
 
+
+class LoadSemiDataset4(Dataset):
+    def __init__(self, data_path, transform, mode='label', ratio=0.05):
+        super(LoadSemiDataset3, self).__init__()
+        self.data_path = data_path
+        
+        self.list_name1 = str(ratio)+"_"+'label'+"_path_list.txt"
+        self.list_name2 = str(ratio)+"_"+'unlabel'+"_path_list2.txt"
+        self.files={}
+        self.files_len = []
+        self.mode = mode
+        self.transform = transform
+        
+        self.load_dataset()
+
+    def load_dataset(self):
+        root = os.path.join(self.data_path, self.list_name1)
+        print(root)
+        with open(os.path.join(self.data_path, self.list_name1), "r") as f:
+            file_names = [x.strip() for x in f.readlines()] 
+        self.image_len = len(file_names)
+        img_seq = [string_to_sequence(s) for s in file_names]
+        self.image_v, self.image_o = pack_sequences(img_seq)
+
+        with open(os.path.join(self.data_path, self.list_name2), "r") as f:
+            files = {}
+            files_len= []
+            for k in range(20):
+                files[(k)] = []
+            img_num = 0
+            for x in f.readlines():
+                img_num+=1
+                words = (x.strip()).split(' ')
+                p = words[0]
+                l = int(words[1])
+                files[l].append(p)
+            self.files = files
+            for i in range(20):
+                num = len(files[i])
+                files_len.append(num)
+            self.files_len = files_len
+        
+
+    def __len__(self):
+        return self.image_len
+
+    def __getitem__(self, index):
+        
+        path = sequence_to_string(unpack_sequence(self.image_v, self.image_o, index))
+        label = int(path.split("/")[-2])
+        img = Image.open(path).convert('RGB')
+        img = self.transform(img)
+
+        idx = np.random.randint(0, self.files_len[label])
+        path2 = self.files[label][idx]
+        img2 = Image.open(path2).convert('RGB')
+        img2 = self.transform(img2)
+        return img, img2, label
+
