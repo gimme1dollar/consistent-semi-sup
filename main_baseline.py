@@ -8,6 +8,7 @@ from os.path import join as pjn
 import os.path, os, datetime, time
 import wandb, argparse
 from utils.losses import *
+
 from utils.semi_sup import semi_sup_learning
 import math
 import warnings
@@ -298,10 +299,10 @@ if __name__ == "__main__":
                         help='Name of the experiment (default: auto)')
     parser.add_argument('--pretrained-ckpt', type=str, default=None,
                         help='Load pretrained weight, write path to weight (default: None)')
-    
+
     parser.add_argument('--batch-size-train', type=int, default=16,    
                         help='Batch size for train data (default: 16)')
-    parser.add_argument('--batch-size-val', type=int, default=16,
+    parser.add_argument('--batch-size-val', type=int, default=4,
                         help='Batch size for val data (default: 4)')
     parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 128)')
