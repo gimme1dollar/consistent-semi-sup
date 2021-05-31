@@ -8,7 +8,8 @@ from os.path import join as pjn
 import os.path, os, datetime, time
 import wandb, argparse
 from utils.losses import *
-#from utils.semi_sup import semi_sup_learning
+
+from utils.semi_sup import semi_sup_learning
 import math
 import warnings
 
@@ -166,10 +167,6 @@ class TrainManager(object):
                 wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
                 top1_acc_stu = top1_acc
 
-                #top1_acc, top3_acc, top5_acc = self.validate(self.teacher ,self.add_cfg['device'])
-                #wandb.log({"validation/teacher_top1_acc" : top1_acc, "validation/teacher_top3_acc" : top3_acc, "validation/teacher_top5_acc" : top5_acc})
-                #top1_acc_t = top1_acc
-
             self.model.train()
 
             for idx, param_group in enumerate(self.optimizer.param_groups):
@@ -302,8 +299,8 @@ if __name__ == "__main__":
                         help='Name of the experiment (default: auto)')
     parser.add_argument('--pretrained-ckpt', type=str, default=None,
                         help='Load pretrained weight, write path to weight (default: None)')
-    
-    parser.add_argument('--batch-size-train', type=int, default=4,    
+
+    parser.add_argument('--batch-size-train', type=int, default=16,    
                         help='Batch size for train data (default: 16)')
     parser.add_argument('--batch-size-val', type=int, default=4,
                         help='Batch size for val data (default: 4)')
