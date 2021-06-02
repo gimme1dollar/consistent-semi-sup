@@ -66,7 +66,7 @@ def init(train_batch, val_batch, test_batch, args):
     )
 
     unlabel_loader = torch.utils.data.DataLoader(
-            dataset=unlabel_dataset, batch_size=6,
+            dataset=unlabel_dataset, batch_size=4,
             num_workers=4, shuffle=True, pin_memory=True
     )
 
@@ -113,8 +113,8 @@ class TrainManager(object):
         self.scaler = scaler
         self.val_loader = val_loader
         self.num_classes = num_classes
-        self.upsampler = torch.nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True)
-        self.upsampler_ul = torch.nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True)
+        self.upsampler = torch.nn.Upsample(scale_factor=args.upscale_factor, mode='bilinear', align_corners=True)
+        self.upsampler_ul = torch.nn.Upsample(scale_factor=args.upscale_factor, mode='bilinear', align_corners=True)
 
         self.flag = True
     def validate(self, device, model, teacher, topk=(1,3,5)):
@@ -437,6 +437,8 @@ if __name__ == "__main__":
                         help='Annealing rate (default: 0.995)')
     parser.add_argument('--second-stage', type=bool, default=False,
                         help='Set True for dual distilaltion learning')
+    parser.add_argument('--upscale-factor', type=int, default=8,
+                        help='Upscale factor for bilinear upsampling')
 
     args = parser.parse_args()
     main(args)
