@@ -10,7 +10,6 @@ from os.path import join as pjn
 import os.path, os, datetime, math, random, time
 import numpy as np
 import wandb, argparse
-from combine import vgg16_cnn
 from utils.losses import *
 from itertools import cycle
 import warnings
@@ -62,6 +61,7 @@ class TrainManager(object):
         self.test_loader = test_loader
         self.dict = {}
         self.mapping={}
+        self.upscaler = torch.nn.Upsample(scale_factor=args.upscale_factor, mode='bilinear', align_corners=True)
 
         for i in range(20):
             self.dict[i] = []
@@ -70,7 +70,6 @@ class TrainManager(object):
             self.mapping[i] = []
 
     def test(self):
-        upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
 
         self.model.eval()
         
@@ -81,7 +80,7 @@ class TrainManager(object):
                     path = path[0].split("/")[-1]
                     path = path.split('.')[0]
                     image = image.cuda()
-                    image = upscale_layer(image)
+                    image = self.upscaler(image)
                     outputs = self.model(image)
                     our_label = outputs.argmax().item()
                     real_label = self.mapping[our_label]
@@ -89,8 +88,6 @@ class TrainManager(object):
                     f.write(str(path) + ","+ str(real_label) + '\n')
     
     def val(self):
-        upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
-
         self.model.eval()
 
         correct_1 = 0
@@ -102,7 +99,7 @@ class TrainManager(object):
 
         with torch.no_grad():
             for b_idx, (image, labels, label_fold) in tqdm(enumerate(self.val_loader), desc="validation", leave=False, total=len(self.val_loader)):
-                image = upscale_layer(image)
+                image = self.upscaler(image)
                 image = image.cuda()
                 labels = labels.cuda()
                 label_fold = label_fold.cuda()
@@ -170,7 +167,7 @@ def main(args):
     )
 
     trainer.val()
-    # trainer.test()
+    trainer.test()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -181,5 +178,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 128)')
     parser.add_argument('--seed', type=int, default=1)
+    parser.add_argument('--upscale-factor', type=int, default=8,
+                        help='upscale factor for bilinear upsampling. It is highly recommended to set the upscaling factor used in training, otherwise, the score would become lower')
     args = parser.parse_args()
     main(args)
