@@ -8,8 +8,6 @@ from os.path import join as pjn
 import os.path, os, datetime, time
 import wandb, argparse
 from utils.losses import *
-
-from utils.semi_sup import semi_sup_learning
 import math
 import warnings
 
@@ -36,11 +34,11 @@ def init(train_batch, val_batch, test_batch, args):
     # default augmentation functions : http://incredible.ai/pytorch/2020/04/25/Pytorch-Image-Augmentation/ 
     # for more augmentation functions : https://github.com/aleju/imgaug
 
-    transform_train = transforms.Compose([
+    transform_unlabel = transforms.Compose([
         #transforms.ToPILImage(),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.5),
-        transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
+        #transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
         transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
@@ -56,8 +54,8 @@ def init(train_batch, val_batch, test_batch, args):
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
     ])
 
-    label_dataset = LoadSemiDataset(data_path = data_path, transform=transform_train , mode='label', ratio=args.ratio)
-    unlabel_dataset = LoadSemiDataset(data_path = data_path, transform=transform_train , mode='unlabel', ratio=args.ratio)
+    label_dataset = LoadSemiDataset(data_path = data_path, transform=transform_unlabel , mode='label', ratio=args.ratio)
+    unlabel_dataset = LoadSemiDataset(data_path = data_path, transform=transform_unlabel , mode='unlabel', ratio=args.ratio)
     val_dataset = LoadDataset(data_path = data_path, transform=transform_val , mode='valid')
     test_dataset = LoadDataset(data_path = data_path, transform=transform_test , mode='test')
 
@@ -117,7 +115,7 @@ class TrainManager(object):
         correct_5 = 0
 
         with torch.no_grad():
-            for b_idx, (image, labels) in tqdm(enumerate(self.val_loader), desc="validation", leave=False):
+            for b_idx, (image, labels, _) in tqdm(enumerate(self.val_loader), desc="validation", leave=False):
                 image = self.upsampler(image)
                 image = image.to(device)
                 labels = labels.to(device)
@@ -142,9 +140,10 @@ class TrainManager(object):
                         correct_5 += correct_k.item()
                     else:
                         raise NotImplementedError("Invalid top-k num")
+                
+            model_top1, model_top3, model_top5 = (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
+        return (model_top1, model_top3, model_top5)
 
-
-        return (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
 
     def train(self):
         start = time.time()
@@ -159,13 +158,11 @@ class TrainManager(object):
         end_epoch = self.args.start_epoch + self.args.num_epochs
 
         unlabel_dataloader = iter(cycle(self.unlabel_loader))
-        alpha = 0.965
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
 
             if epoch % 5 == 0:
                 top1_acc, top3_acc, top5_acc = self.validate(self.model, self.add_cfg['device'])
                 wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
-                top1_acc_stu = top1_acc
 
             self.model.train()
 
@@ -198,7 +195,13 @@ class TrainManager(object):
 
             self.adjust_learning_rate(epoch)
             self.save_ckpt(epoch)
-            
+
+            if epoch % 1 == 0:
+                (model_top1, model_top3, model_top5), (model_top1_t, model_top3_t, model_top5_t) \
+                     = self.validate(self.add_cfg['device'], self.model, self.teacher)
+                wandb.log({"validation/top1_acc" : model_top1, "validation/top3_acc" : model_top3, "validation/top5_acc" : model_top5}, commit=False)
+                
+                
         end = time.time()   
         print("Total training time : ", str(datetime.timedelta(seconds=(int(end)-int(start)))))
         print("Finish.")
@@ -222,6 +225,8 @@ class TrainManager(object):
             d = {
                 'epoch': epoch,
                 'model_state_dict': self.model.state_dict(),
+                'teacher_state_dict': self.teacher.state_dict(),
+                'second_student_state_dict' : self.sec_student.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
             }
             torch.save(d, fpath)
@@ -254,16 +259,14 @@ def main(args):
         lr=args.lr,
         weight_decay=args.weight_decay,
         momentum=0.9)
-
+    
     scaler = torch.cuda.amp.GradScaler() 
-
     if args.pretrained_ckpt:
         print(f"  Using pretrained model only and its checkpoint "
               f"'{args.pretrained_ckpt}'")
         loaded_struct = torch.load(pjn(orig_cwd, args.pretrained_ckpt))
-        model.load_state_dict(loaded_struct['model_state_dict'], strict=True)
+        model.load_state_dict(loaded_struct['model_state_dict'], strict=False)
         print("load optimizer's params")
-        loaded_struct = torch.load(pjn(orig_cwd, args.pretrained_ckpt))
         optimizer.load_state_dict(loaded_struct['optimizer_state_dict'])
         for state in optimizer.state.values():
             for k, v in state.items():
@@ -306,7 +309,6 @@ if __name__ == "__main__":
                         help='Batch size for val data (default: 4)')
     parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 128)')
-    parser.add_argument('--ratio', type=float, default=0.125)
 
     parser.add_argument('--save-ckpt', type=int, default=5,
                         help='number of epoch save current weight? (default: 5)')
@@ -324,6 +326,5 @@ if __name__ == "__main__":
                         help='Annealing rate (default: 0.95)')
     
 
-    
     args = parser.parse_args()
     main(args)

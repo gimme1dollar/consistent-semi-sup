@@ -1,9 +1,11 @@
 .vscode/*
-dataset/DL20
-dataset/ImageNet
+dataset/DL20/test
+dataset/DL20/train
+dataset/DL20/valid
 wandb/
 checkpoints/
 .DS_Store
 venv/
 model/
 .idea/
+dataset/DL20
