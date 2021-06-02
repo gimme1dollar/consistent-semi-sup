@@ -235,13 +235,12 @@ class TrainManager(object):
                 wandb.log({str(idx)+"_lr": math.log10(avg_lr), 'epoch': epoch})
 
             for t_idx in tqdm(range(iter_per_epoch),  desc='batch_iter', leave=False, total=iter_per_epoch):
-                (image, target), (image_ul, label_ul) = next(dataloader)
+                (image, target), image_ul = next(dataloader)
                 image = self.upsampler(image)
                 image = image.to(self.add_cfg['device']) # DL20
                 target = target.to(self.add_cfg['device'])
 
                 image_ul = image_ul.to(self.add_cfg['device']) # DL20
-                label_ul = label_ul.to(self.add_cfg['device']) # DL20
 
                 self.optimizer.zero_grad()
                 losses_list = []
@@ -260,7 +259,7 @@ class TrainManager(object):
                     # vat loss ##
                     con_loss = semi_sup_learning(self, image, image_ul)
                     losses_list.append(con_loss)
-                    wandb.log({"training/con_loss" : con_loss}) 
+                    wandb.log({"training/vat_loss" : con_loss}) 
                     
                     if self.args.second_stage:
                         adv_self_training(self, image, outputs, target, image_ul)
@@ -362,6 +361,8 @@ def main(args):
     
     
     scaler = torch.cuda.amp.GradScaler() 
+    if args.second_stage and args.pretrained_ckpt is None:
+        raise Exception("Need well-trained mean teacher weights.")
     if args.pretrained_ckpt:
         print(f"  Using pretrained model only and its checkpoint "
               f"'{args.pretrained_ckpt}'")

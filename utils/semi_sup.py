@@ -1,11 +1,6 @@
 import torch
-import torch.nn as nn
-import numpy as np
-import torch.nn.functional as F
-from torchvision import transforms
 from utils.losses import *
-import wandb, random
-from copy import deepcopy
+import wandb
 
 def semi_sup_learning(self, input_ul, label_ul):
     input_ul = self.upsampler_ul(input_ul)

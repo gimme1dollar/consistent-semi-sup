@@ -5,11 +5,12 @@ from torchvision import transforms
 from dataset.dataloader import LoadDataset, LoadSemiDataset
 from tqdm import tqdm
 from os.path import join as pjn
-import os.path, os, datetime, time
+import os.path, os, datetime, time, sys
 import wandb, argparse
 from utils.losses import *
 import math
 import warnings
+
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 warnings.filterwarnings(action='ignore')
@@ -104,7 +105,7 @@ class TrainManager(object):
         self.scaler = scaler
         self.val_loader = val_loader
         self.num_classes = num_classes
-        self.upsampler = torch.nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True)
+        self.upsampler = torch.nn.Upsample(scale_factor=args.upscale_factor, mode='bilinear', align_corners=True)
 
     def validate(self, model, device, topk=(1,3,5)):
         model.eval()
@@ -197,8 +198,8 @@ class TrainManager(object):
             self.save_ckpt(epoch)
 
             if epoch % 1 == 0:
-                (model_top1, model_top3, model_top5), (model_top1_t, model_top3_t, model_top5_t) \
-                     = self.validate(self.add_cfg['device'], self.model, self.teacher)
+                (model_top1, model_top3, model_top5) \
+                     = self.validate(self.add_cfg['device'], self.model)
                 wandb.log({"validation/top1_acc" : model_top1, "validation/top3_acc" : model_top3, "validation/top5_acc" : model_top5}, commit=False)
                 
                 
@@ -225,8 +226,6 @@ class TrainManager(object):
             d = {
                 'epoch': epoch,
                 'model_state_dict': self.model.state_dict(),
-                'teacher_state_dict': self.teacher.state_dict(),
-                'second_student_state_dict' : self.sec_student.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
             }
             torch.save(d, fpath)
@@ -305,10 +304,12 @@ if __name__ == "__main__":
 
     parser.add_argument('--batch-size-train', type=int, default=16,    
                         help='Batch size for train data (default: 16)')
-    parser.add_argument('--batch-size-val', type=int, default=4,
+    parser.add_argument('--batch-size-val', type=int, default=64,
                         help='Batch size for val data (default: 4)')
     parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 128)')
+    parser.add_argument('--ratio', type=float, default=0.02,
+                        help="label:unlabel ratio(0.5, 0.125, 0.05, 0.02)")
 
     parser.add_argument('--save-ckpt', type=int, default=5,
                         help='number of epoch save current weight? (default: 5)')
@@ -324,6 +325,8 @@ if __name__ == "__main__":
                         help='Weight decay for SGD (default: 0.0005)')
     parser.add_argument('--lr-anneal-rate', type=float, default=0.995,
                         help='Annealing rate (default: 0.95)')
+    parser.add_argument('--upscale-factor', type=int, default=8,
+                        help='Upscale factor for bilinear upsampling')
     
 
     args = parser.parse_args()

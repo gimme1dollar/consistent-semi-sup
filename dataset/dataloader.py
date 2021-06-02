@@ -137,6 +137,6 @@ class LoadSemiDataset(Dataset):
         if self.mode == 'label':
             return img, label
         elif self.mode == 'unlabel':
-            return img, label
+            return img
         else: 
             raise NotImplementedError()
