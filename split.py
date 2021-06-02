@@ -40,9 +40,7 @@ def class_balanced_split(label_ratio=0.2):
     print("label data ratio : ", len(label_path_list) / (len(label_path_list) + len(unlabel_path_list)))
 
 if __name__ == "__main__":
-    class_balanced_split(1)
     class_balanced_split(1/2)
     class_balanced_split(1/8)
-    class_balanced_split(1/10)
     class_balanced_split(1/20)
     class_balanced_split(1/50)

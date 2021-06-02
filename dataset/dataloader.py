@@ -1,5 +1,6 @@
 import os
 import torch
+import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset
 from torchvision.datasets import ImageFolder
@@ -35,6 +36,14 @@ def path_join(train_path, label, file_list):
         path_list.append(os.path.join(train_path, label, f))
     
     return path_list
+
+class ImageFolderWithPaths(torchvision.datasets.ImageFolder):    
+    def __getitem__(self, index):
+        original_tuple = super(ImageFolderWithPaths, self).__getitem__(index)
+        path = self.imgs[index][0]
+        tuple_with_path = (original_tuple + (path,))
+        return tuple_with_path
+
 class LoadDataset(Dataset):
     def __init__(self, data_path, transform, mode='valid'):
         super(LoadDataset, self).__init__()
@@ -51,11 +60,14 @@ class LoadDataset(Dataset):
         root = os.path.join(self.data_path, self.mode)
         print("root : ", root)
         self.data = glob.glob(root+"/*.png")
+        self.image_len = len(self.data )
         
     def load_dataset(self):
+        root = os.path.join(self.data_path, self.mode)
+        self.data = ImageFolderWithPaths(root=root)
+
         train_path = os.path.join(self.data_path, self.mode)
         folder_list = os.listdir(train_path) # folder list [0,1,2,...,19]
-
         path_list = []
         for label_num in folder_list:
             file_path = os.path.join(train_path, label_num)     
@@ -65,6 +77,7 @@ class LoadDataset(Dataset):
         img_seq = [string_to_sequence(s) for s in path_list]
         self.image_v, self.image_o = pack_sequences(img_seq)
 
+        
     def __len__(self):
         return self.image_len
 
@@ -72,14 +85,28 @@ class LoadDataset(Dataset):
         if self.mode == "test":
             img = Image.open(self.data[index]).convert('RGB')
             img = self.transform(img)
-            return img
+            return img, self.data[index]
         else:
-            path = sequence_to_string(unpack_sequence(self.image_v, self.image_o, index))
-            label = int(path.split("/")[-2])
-            img = Image.open(path).convert('RGB')
-            img = self.transform(img)
 
-            return img, label
+            img_fold, label_fold, pathf = self.data[index]
+            img_fold  = self.transform(img_fold)
+
+            #path = sequence_to_string(unpack_sequence(self.image_v, self.image_o, index))
+            label = int(pathf.split("/")[-2])
+            img = Image.open(pathf).convert('RGB')
+            img = self.transform(img)
+            
+            
+            #print(path, "\n", pathf)
+            # if label != label_fold:
+            #     print(label, label_fold)
+            #     print(pathf)
+            #     print(pathf.split("/"))
+            #     print(int(pathf.split("/")[-2]))
+            #     exit()
+
+            return img, label, label_fold
+
 class LoadSemiDataset(Dataset):
     def __init__(self, data_path, transform, mode='label', ratio=0.05):
         super(LoadSemiDataset, self).__init__()

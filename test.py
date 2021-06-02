@@ -13,7 +13,6 @@ import wandb, argparse
 from combine import vgg16_cnn
 from utils.losses import *
 from itertools import cycle
-from adabound import AdaBound
 import warnings
 
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -36,29 +35,45 @@ def init(test_batch):
         transforms.ToTensor(),
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
     ])
+
+    val_dataset = LoadDataset(data_path = data_path, transform=transform_test , mode='valid')
     test_dataset = LoadDataset(data_path = data_path, transform=transform_test , mode='test')
     test_loader = torch.utils.data.DataLoader(
             dataset=test_dataset, batch_size=test_batch,
-            num_workers=4, shuffle=False, pin_memory=True
+            num_workers=0, shuffle=False, pin_memory=True
     )
-    return test_loader
+    val_loader = torch.utils.data.DataLoader(
+            dataset=val_dataset, batch_size=1,
+            num_workers=0, shuffle=False, pin_memory=True
+    )
+    return val_loader, test_loader
     
 class TrainManager(object):
     def __init__(
             self,
             model,
             args,
+            val_loader,
             test_loader,
             ):
         self.args = args
         self.model = model
+        self.val_loader = val_loader
         self.test_loader = test_loader
-        
+        self.dict = {}
+        self.mapping={}
 
-    def validate(self):
-        upscale_layer = torch.nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True)
+        for i in range(20):
+            self.dict[i] = []
+        
+        for i in range(20):
+            self.mapping[i] = []
+
+    def test(self):
+        upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
 
         self.model.eval()
+        
         with open(self.args.exp_name + "_test.csv", "w") as f:
             f.write("Id"+","+"Category" + '\n')
             with torch.no_grad():
@@ -68,7 +83,61 @@ class TrainManager(object):
                     image = image.cuda()
                     image = upscale_layer(image)
                     outputs = self.model(image)
-                    f.write(str(path) + ","+ str(outputs.argmax().item()) + '\n')
+                    our_label = outputs.argmax().item()
+                    real_label = self.mapping[our_label]
+
+                    f.write(str(path) + ","+ str(real_label) + '\n')
+    
+    def val(self):
+        upscale_layer = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
+
+        self.model.eval()
+
+        correct_1 = 0
+        correct_3 = 0
+        correct_5 = 0
+        total = 0
+        topk=(1,3,5)
+        maxk = max(topk)
+
+        with torch.no_grad():
+            for b_idx, (image, labels, label_fold) in tqdm(enumerate(self.val_loader), desc="validation", leave=False, total=len(self.val_loader)):
+                image = upscale_layer(image)
+                image = image.cuda()
+                labels = labels.cuda()
+                label_fold = label_fold.cuda()
+
+                self.dict[label_fold.item()].append(labels.item())
+
+                total += image.shape[0]
+                
+                outputs = self.model(image) # b x 1
+
+                _, pred = outputs.topk(maxk, 1, True, True)
+                pred = pred.t()
+                correct = (pred == labels.unsqueeze(dim=0)).expand_as(pred)
+
+                for k in topk:
+                    if k == 1:
+                        correct_k = correct[:1].reshape(-1).float().sum(0, keepdim=True)
+                        correct_1 += correct_k.item()
+                    elif k == 3:
+                        correct_k = correct[:3].reshape(-1).float().sum(0, keepdim=True)
+                        correct_3 += correct_k.item()
+                    elif k == 5:
+                        correct_k = correct[:5].reshape(-1).float().sum(0, keepdim=True)
+                        correct_5 += correct_k.item()
+                    else:
+                        raise NotImplementedError("Invalid top-k num")
+                
+
+            model_top1, model_top3, model_top5 = (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
+            print("top1 / top3 / top5 : ", model_top1, model_top3, model_top5)
+
+            for key, value in self.dict.items():
+                self.dict[key]=list(set(value))[0]
+                self.mapping[list(set(value))[0]] = key
+
 
 def main(args):
     # for deterministic training, enable all below options.
@@ -87,19 +156,21 @@ def main(args):
         print(f"  Using pretrained model only and its checkpoint "
               f"'{args.pretrained_ckpt}'")
         loaded_struct = torch.load(pjn(orig_cwd, args.pretrained_ckpt))
-        model.load_state_dict(loaded_struct['model_state_dict'], strict=True)
+        model.load_state_dict(loaded_struct['second_student_state_dict'], strict=True)
         
-    test_loader = init(
+    val_loader, test_loader = init(
         args.batch_size_test
     )
 
     trainer = TrainManager(
         model,
         args,
-        test_loader,
+        val_loader,
+        test_loader
     )
 
-    trainer.validate()
+    trainer.val()
+    # trainer.test()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

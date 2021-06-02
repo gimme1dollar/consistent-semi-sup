@@ -100,7 +100,7 @@ class SmoothCrossEntropy(nn.Module):
         return loss.mean()
 
 
-# bring code from https://github.com/jik0730/VAT-pytorch
+# bring from https://github.com/jik0730/VAT-pytorch
 class VAT(nn.Module):
     """
     We define a function of regularization, specifically VAT.

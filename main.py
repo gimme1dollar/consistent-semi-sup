@@ -1,15 +1,14 @@
 from efficientnet_pytorch.model import EfficientNet
-import torch
-import torch.multiprocessing
+from utils.losses import *
+from utils.semi_sup import adv_self_training, semi_sup_learning
 from torchvision import transforms
 from dataset.dataloader import LoadDataset, LoadSemiDataset
 from tqdm import tqdm
 from os.path import join as pjn
+import torch
+import torch.multiprocessing
 import os.path, os, datetime, time
 import wandb, argparse
-from utils.losses import *
-from combine import modified_effinet
-from utils.semi_sup import adv_self_training, semi_sup_learning
 import math
 import warnings
 
@@ -23,7 +22,7 @@ imagenet_std = [0.229, 0.224, 0.225]
 
 data_path = pjn(os.getcwd(), "dataset", "DL20")
 
-def cycle(iterable):
+def cycle(iterable): # cycle from itertools yields memory leakages in pytorch.
     iterator = iter(iterable)
     while True:
         try:
@@ -42,19 +41,6 @@ def init(train_batch, val_batch, test_batch, args):
         transforms.RandomVerticalFlip(p=0.5),
         #transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
         transforms.RandomGrayscale(p=0.2),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
-    ])
-
-    transform_train = transforms.Compose([
-        #transforms.ToPILImage(),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomVerticalFlip(p=0.5),
-        transforms.RandomApply( [transforms.ColorJitter( brightness=(0.2, 2) )], p=0.5),
-        transforms.RandomApply([transforms.ColorJitter(  contrast=(0.3, 2)   )], p=0.5),
-        transforms.RandomApply([transforms.ColorJitter(  saturation=(0.2, 2) )], p=0.5),
-        transforms.RandomApply([transforms.ColorJitter( hue=(-0.3, 0.3))], p=0.5),
-        transforms.RandomApply([transforms.RandomRotation(90, expand=False)], p=0.5),
         transforms.ToTensor(),
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
     ])
@@ -80,7 +66,7 @@ def init(train_batch, val_batch, test_batch, args):
     )
 
     unlabel_loader = torch.utils.data.DataLoader(
-            dataset=unlabel_dataset, batch_size=4,
+            dataset=unlabel_dataset, batch_size=6,
             num_workers=4, shuffle=True, pin_memory=True
     )
 
@@ -127,8 +113,8 @@ class TrainManager(object):
         self.scaler = scaler
         self.val_loader = val_loader
         self.num_classes = num_classes
-        self.upsampler = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
-        self.upsampler_ul = torch.nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True)
+        self.upsampler = torch.nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True)
+        self.upsampler_ul = torch.nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True)
 
         self.flag = True
     def validate(self, device, model, teacher, topk=(1,3,5)):
@@ -145,7 +131,7 @@ class TrainManager(object):
         correct_5_t = 0
 
         with torch.no_grad():
-            for b_idx, (image, labels) in tqdm(enumerate(self.val_loader), desc="validation", leave=False):
+            for b_idx, (image, labels, _) in tqdm(enumerate(self.val_loader), desc="validation", leave=False):
                 image = self.upsampler(image)
                 image = image.to(device)
                 labels = labels.to(device)
@@ -202,7 +188,7 @@ class TrainManager(object):
         correct_5 = 0
 
         with torch.no_grad():
-            for b_idx, (image, labels) in tqdm(enumerate(self.val_loader), desc="validation", leave=False):
+            for b_idx, (image, labels, _) in tqdm(enumerate(self.val_loader), desc="validation", leave=False):
                 image = self.upsampler(image)
                 image = image.to(device)
                 labels = labels.to(device)
@@ -228,8 +214,6 @@ class TrainManager(object):
                 
             model_top1, model_top3, model_top5 = (correct_1 / total) * 100, (correct_3 / total) * 100, (correct_5 / total) * 100
         return (model_top1, model_top3, model_top5)
-
-                
 
     def train(self):
         start = time.time()
@@ -273,14 +257,13 @@ class TrainManager(object):
 
                     losses_list.append(0.5 * con_loss_sup)  
 
-                    ## unsup loss ##
-                    if self.flag is True:
-                        con_loss = semi_sup_learning(self, image, image_ul)
-                        if con_loss != 0:
-                            losses_list.append(con_loss)
-                        wandb.log({"training/con_loss" : con_loss}) 
+                    # vat loss ##
+                    con_loss = semi_sup_learning(self, image, image_ul)
+                    losses_list.append(con_loss)
+                    wandb.log({"training/con_loss" : con_loss}) 
                     
-                    adv_self_training(self, image, outputs, target, image_ul)
+                    if self.args.second_stage:
+                        adv_self_training(self, image, outputs, target, image_ul)
                 
                 wandb.log({"training/celoss" : celoss})
                 wandb.log({"training/con_loss_sup" : 0.5 * con_loss_sup})
@@ -296,21 +279,16 @@ class TrainManager(object):
             self.adjust_learning_rate(epoch)
             self.save_ckpt(epoch)
 
-            # if epoch % 8 == 0 and epoch != 0:
-            #     self.validate_unlabel(self.add_cfg['device'], self.bce_model, self.unlabel_testloader, tag="unlabeled")
-
-            if epoch % 2 == 0:
+            if epoch % 1 == 0:
                 (model_top1, model_top3, model_top5), (model_top1_t, model_top3_t, model_top5_t) \
                      = self.validate(self.add_cfg['device'], self.model, self.teacher)
                 wandb.log({"validation/top1_acc" : model_top1, "validation/top3_acc" : model_top3, "validation/top5_acc" : model_top5}, commit=False)
                 wandb.log({"validation/teacher_top1_acc" : model_top1_t, "validation/teacher_top3_acc" : model_top3_t, "validation/teacher_top5_acc" : model_top5_t})
                 
-                if self.flag is False:
-                    if (model_top1 >= 70 or model_top1_t >= 70): self.flag = True
-
-                (model_top1, model_top3, model_top5)\
-                     = self.validate_sect(self.add_cfg['device'])
-                wandb.log({"sec_t/top1_acc" : model_top1, "sec_t/top3_acc" : model_top3, "sec_t/top5_acc" : model_top5})
+                if self.args.second_stage:
+                    (model_top1, model_top3, model_top5)\
+                         = self.validate_sect(self.add_cfg['device'])
+                    wandb.log({"sec_t/top1_acc" : model_top1, "sec_t/top3_acc" : model_top3, "sec_t/top5_acc" : model_top5})
                 
             
         end = time.time()   
@@ -347,22 +325,18 @@ def main(args):
     # torch.manual_seed(args.seed)
     # torch.cuda.manual_seed(args.seed)
     # torch.cuda.manual_seed_all(args.seed) # if use multi-GPU
-    #torch.backends.cudnn.deterministic = False
+    # torch.backends.cudnn.deterministic = False
     # np.random.seed(args.seed)
     # random.seed(args.seed)
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = False
 
     wandb.init(project="DL20")
     orig_cwd = os.getcwd()
     
     # bring effi model from this : https://github.com/lukemelas/EfficientNet-PyTorch
     model = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20).cuda()
-    model.set_swish(True)
     teacher = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20).cuda()
-    teacher.set_swish(True)
-
     second_student = EfficientNet.from_pretrained('efficientnet-b4', num_classes=20).cuda()
-    second_student.set_swish(True)
 
     for param in teacher.parameters():
         param.detach_()
@@ -388,7 +362,6 @@ def main(args):
     
     
     scaler = torch.cuda.amp.GradScaler() 
-
     if args.pretrained_ckpt:
         print(f"  Using pretrained model only and its checkpoint "
               f"'{args.pretrained_ckpt}'")
@@ -396,12 +369,12 @@ def main(args):
         model.load_state_dict(loaded_struct['model_state_dict'], strict=False)
         teacher.load_state_dict(loaded_struct['teacher_state_dict'], strict=False)
         print("load optimizer's params")
-        loaded_struct = torch.load(pjn(orig_cwd, args.pretrained_ckpt))
         optimizer.load_state_dict(loaded_struct['optimizer_state_dict'])
         for state in optimizer.state.values():
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.cuda()
+        del loaded_struct
 
     now = datetime.datetime.now()
     ti = str(now.strftime('%Y-%m-%d-%H-%M-%S'))
@@ -436,15 +409,19 @@ if __name__ == "__main__":
     parser.add_argument('--pretrained-ckpt', type=str, default=None,
                         help='Load pretrained weight, write path to weight (default: None)')
     
-    parser.add_argument('--batch-size-train', type=int, default=4,    
+    parser.add_argument('--pretraining-weight', type=str, default=None,
+                        help='Load pretraining_weight, write path to weight (default: None)')
+    
+    parser.add_argument('--batch-size-train', type=int, default=8,    
                         help='Batch size for train data (default: 16)')
     parser.add_argument('--batch-size-val', type=int, default=64,
                         help='Batch size for val data (default: 4)')
     parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 128)')
-    parser.add_argument('--ratio', type=float, default=0.02)
+    parser.add_argument('--ratio', type=float, default=0.02,
+                        help="label:unlabel ratio(0.5, 0.125, 0.05, 0.02)")
 
-    parser.add_argument('--save-ckpt', type=int, default=5,
+    parser.add_argument('--save-ckpt', type=int, default=2,
                         help='number of epoch save current weight? (default: 5)')
 
     parser.add_argument('--start-epoch', type=int, default=0,
@@ -457,9 +434,9 @@ if __name__ == "__main__":
     parser.add_argument('--weight-decay', type=float, default=1e-5,
                         help='Weight decay for SGD (default: 0.0005)')
     parser.add_argument('--lr-anneal-rate', type=float, default=0.995,
-                        help='Annealing rate (default: 0.95)')
-    
+                        help='Annealing rate (default: 0.995)')
+    parser.add_argument('--second-stage', type=bool, default=False,
+                        help='Set True for dual distilaltion learning')
 
-    
     args = parser.parse_args()
     main(args)
