@@ -437,7 +437,7 @@ if __name__ == "__main__":
                         help='Batch size for test data (default: 128)')
     parser.add_argument('--ratio', type=float, default=0.02)
 
-    parser.add_argument('--save-ckpt', type=int, default=5,
+    parser.add_argument('--save-ckpt', type=int, default=2,
                         help='number of epoch save current weight? (default: 5)')
 
     parser.add_argument('--start-epoch', type=int, default=0,

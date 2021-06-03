@@ -1,15 +1,9 @@
 # Implemented upon pytorch 1.2.0
 import torch.nn as nn
 import torch
-from pytorch_msssim import ssim, ms_ssim, SSIM, MS_SSIM
-import torchvision.transforms.functional as F
-import torch.nn.functional as F_nn
-from torch.autograd import Variable
-from tqdm import tqdm
+import torch.nn.functional as F
 import wandb
 import random
-from utils.visualize import *
-import copy
 
 def CEloss(inputs, gt, ignore_index=255):
     return nn.CrossEntropyLoss(ignore_index=ignore_index)(inputs, gt)

@@ -1,7 +1,8 @@
 from efficientnet_pytorch.model import EfficientNet
 from torch.utils.data import Dataset, DataLoader
 import torch, torchvision
-import torch.nn as nn
+from PIL import Image
+from typing import Union
 import torch.multiprocessing
 from torchvision import transforms
 from tqdm import tqdm
@@ -263,7 +264,7 @@ def main(args):
     )
 
     trainer.val()
-    trainer.test()
+    trainer.test() # must do testing after validation
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
