@@ -263,7 +263,7 @@ def main(args):
     )
 
     trainer.val()
-    trainer.test()
+    trainer.test() # must do test after validation
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
