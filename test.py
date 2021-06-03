@@ -3,16 +3,15 @@ from torch.utils.data import Dataset, DataLoader
 import torch, torchvision
 import torch.nn as nn
 import torch.multiprocessing
-from torchvision import transforms, utils
-from dataset.dataloader import LoadDataset
-from tqdm import tqdm, tqdm_notebook
+from torchvision import transforms
+from tqdm import tqdm
 from os.path import join as pjn
-import os.path, os, datetime, math, random, time
+import os.path, os, random
 import numpy as np
-import wandb, argparse
+import argparse
 from utils.losses import *
-from itertools import cycle
 import warnings
+import glob
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 warnings.filterwarnings(action='ignore')
@@ -25,6 +24,104 @@ imagenet_std = [0.229, 0.224, 0.225]
 
 data_path = pjn(os.getcwd(), "dataset", "DL20")
 imagenet_data_path = pjn(os.getcwd(), "dataset", "ImageNet", "ILSVRC", "Data", "CLS-LOC")
+
+def string_to_sequence(s: str, dtype=np.int32) -> np.ndarray:
+    return np.array([ord(c) for c in s], dtype=dtype)
+
+def sequence_to_string(seq: np.ndarray) -> str:
+    return ''.join([chr(c) for c in seq])
+
+def pack_sequences(seqs: Union[np.ndarray, list]):
+    values = np.concatenate(seqs, axis=0)
+    offsets = np.cumsum([len(s) for s in seqs])
+    return values, offsets
+
+def unpack_sequence(values: np.ndarray, offsets: np.ndarray, index: int) -> np.ndarray:
+    off1 = offsets[index]
+    if index > 0:
+        off0 = offsets[index - 1]
+    elif index == 0:
+        off0 = 0
+    else:
+        raise ValueError(index)
+    return values[off0:off1]
+
+def path_join(train_path, label, file_list):
+    path_list = []
+    for f in file_list:
+        path_list.append(os.path.join(train_path, label, f))
+    
+    return path_list
+
+class ImageFolderWithPaths(torchvision.datasets.ImageFolder):    
+    def __getitem__(self, index):
+        original_tuple = super(ImageFolderWithPaths, self).__getitem__(index)
+        path = self.imgs[index][0]
+        tuple_with_path = (original_tuple + (path,))
+        return tuple_with_path
+
+class LoadDataset(Dataset):
+    def __init__(self, data_path, transform, mode='valid'):
+        super(LoadDataset, self).__init__()
+        self.data_path = data_path
+        self.mode = mode
+        self.transform = transform
+        
+        if mode == "test":
+            self.test_load()
+        else : 
+            self.load_dataset()
+
+    def test_load(self):
+        root = os.path.join(self.data_path, self.mode)
+        print("root : ", root)
+        self.data = glob.glob(root+"/*.png")
+        self.image_len = len(self.data )
+        
+    def load_dataset(self):
+        root = os.path.join(self.data_path, self.mode)
+        self.data = ImageFolderWithPaths(root=root)
+
+        train_path = os.path.join(self.data_path, self.mode)
+        folder_list = os.listdir(train_path) # folder list [0,1,2,...,19]
+        path_list = []
+        for label_num in folder_list:
+            file_path = os.path.join(train_path, label_num)     
+            file_list = os.listdir(file_path)
+            path_list += path_join(train_path, label_num, file_list)
+        self.image_len = len(path_list)
+        img_seq = [string_to_sequence(s) for s in path_list]
+        self.image_v, self.image_o = pack_sequences(img_seq)
+
+        
+    def __len__(self):
+        return self.image_len
+
+    def __getitem__(self, index):
+        if self.mode == "test":
+            img = Image.open(self.data[index]).convert('RGB')
+            img = self.transform(img)
+            return img, self.data[index]
+        else:
+
+            img_fold, label_fold, pathf = self.data[index]
+            img_fold  = self.transform(img_fold)
+
+            #path = sequence_to_string(unpack_sequence(self.image_v, self.image_o, index))
+            label = int(pathf.split("/")[-2])
+            img = Image.open(pathf).convert('RGB')
+            img = self.transform(img)
+            
+            
+            #print(path, "\n", pathf)
+            # if label != label_fold:
+            #     print(label, label_fold)
+            #     print(pathf)
+            #     print(pathf.split("/"))
+            #     print(int(pathf.split("/")[-2]))
+            #     exit()
+
+            return img, label, label_fold
 
 def init(test_batch):
 
@@ -135,7 +232,6 @@ class TrainManager(object):
                 self.dict[key]=list(set(value))[0]
                 self.mapping[list(set(value))[0]] = key
 
-
 def main(args):
     # for deterministic training, enable all below options.
     torch.manual_seed(args.seed)
@@ -178,7 +274,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size-test', type=int, default=1,
                         help='Batch size for test data (default: 128)')
     parser.add_argument('--seed', type=int, default=1)
-    parser.add_argument('--upscale-factor', type=int, default=8,
+    parser.add_argument('--upscale-factor', type=int, default=4,
                         help='upscale factor for bilinear upsampling. It is highly recommended to set the upscaling factor used in training, otherwise, the score would become lower')
     args = parser.parse_args()
     main(args)

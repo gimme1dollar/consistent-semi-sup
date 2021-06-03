@@ -11,7 +11,6 @@ from utils.losses import *
 import math
 import warnings
 
-
 torch.multiprocessing.set_sharing_strategy('file_system')
 warnings.filterwarnings(action='ignore')
 
@@ -158,7 +157,6 @@ class TrainManager(object):
         print("  Progress bar for training epochs:")
         end_epoch = self.args.start_epoch + self.args.num_epochs
 
-        unlabel_dataloader = iter(cycle(self.unlabel_loader))
         for epoch in tqdm(range(self.args.start_epoch, end_epoch), desc='epochs', leave=False):
 
             if epoch % 5 == 0:
@@ -166,7 +164,6 @@ class TrainManager(object):
                 wandb.log({"validation/top1_acc" : top1_acc, "validation/top3_acc" : top3_acc, "validation/top5_acc" : top5_acc})
 
             self.model.train()
-
             for idx, param_group in enumerate(self.optimizer.param_groups):
                 avg_lr = param_group['lr']
                 wandb.log({str(idx)+"_lr": math.log10(avg_lr), 'epoch': epoch})
@@ -175,9 +172,6 @@ class TrainManager(object):
                 image = self.upsampler(image)
                 image = image.to(self.add_cfg['device']) # DL20
                 target = target.to(self.add_cfg['device'])
-
-                image_ul = next(unlabel_dataloader)
-                image_ul = image_ul.to(self.add_cfg['device']) # DL20
 
                 self.optimizer.zero_grad()
                 losses_list = []

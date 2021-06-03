@@ -1,16 +1,18 @@
 # Implemented upon pytorch 1.2.0
 import torch.nn as nn
 import torch
+from pytorch_msssim import ssim, ms_ssim, SSIM, MS_SSIM
 import torchvision.transforms.functional as F
+import torch.nn.functional as F_nn
+from torch.autograd import Variable
+from tqdm import tqdm
+import wandb
+import random
 from utils.visualize import *
+import copy
 
 def CEloss(inputs, gt, ignore_index=255):
     return nn.CrossEntropyLoss(ignore_index=ignore_index)(inputs, gt)
-
-def MSEloss(inputs, gt):
-    c = nn.MSELoss()
-    loss = c(inputs,gt)
-    return loss
 
 def total_loss(losses_list):
     total = 0
@@ -21,12 +23,84 @@ def total_loss(losses_list):
             total += component
     return total
 
+def cosine_loss(x1, x2, y):
+    
+    p_loss = 0
+    p_cnt = 1e-12
+    n_loss = 0
+    n_cnt = 1e-12
+
+    for idx in range(x1.shape[0]):
+        cos = torch.cosine_similarity(x1[idx], x2[idx], dim=0)
+        if y[idx] == 1:
+            p_loss += 3 - cos
+            p_cnt += 1
+            wandb.log({"training/same_sim" : cos}, commit=False)
+            wandb.log({"training/same_sim_1-cos" : 3 - cos}, commit=False)
+
+        elif y[idx] == -1:
+            n_loss += max(0, cos + 0.5)
+            n_cnt += 1
+            wandb.log({"training/diff_sim" : max(0, cos + 0.5)}, commit=False)
+
+    pm = p_loss / p_cnt
+    nm = n_loss / n_cnt
+    
+    wandb.log({"training/same_avg_loss" : pm}, commit=False)
+    wandb.log({"training/diff_avg_loss" : nm}, commit=False)
+    return pm, nm
+
+def triplet_loss(image, target, anc_vector):
+
+    tp_loss = nn.TripletMarginWithDistanceLoss(distance_function=nn.PairwiseDistance())
+    loss = 0
+
+    for oidx in range(image.shape[0]):
+        pos_list = []
+        neg_list = []
+        for iidx in range(image.shape[0]):
+            label = (target[oidx] == target[iidx])
+            if label.any(): # positive
+                pos_list.append(iidx)
+            else:
+                neg_list.append(iidx)
+
+        min_range = min(len(pos_list), len(neg_list))
+
+        p1 = random.sample(pos_list, min_range)
+        n1 = random.sample(neg_list, min_range)
+        
+        loss += tp_loss(anc_vector[oidx], anc_vector[p1], anc_vector[n1])
+
+    loss = loss / (image.shape[0])
+    wandb.log({"training/triplet_loss":loss})
+    return loss
+
+
 def softmax_kl_loss(input_logits, target_logits):
     input_log_softmax = F.log_softmax(input_logits, dim=0)
     target_softmax = F.softmax(target_logits, dim=0)
     return F.kl_div(input_log_softmax, target_softmax, size_average=False)
 
-# bring from https://github.com/jik0730/VAT-pytorch
+def entropy_loss(ul_y):
+    p = F.softmax(ul_y, dim=1)
+    return -(p*F.log_softmax(ul_y, dim=1)).sum(dim=1).mean(dim=0)
+
+class SmoothCrossEntropy(nn.Module):
+    def __init__(self, alpha=0.1):
+        super(SmoothCrossEntropy, self).__init__()
+        self.alpha = alpha
+
+    def forward(self, logits, labels):
+        num_classes = logits.shape[-1]
+        alpha_div_k = self.alpha / num_classes
+        target_probs = F.one_hot(labels, num_classes=num_classes).float() * \
+            (1. - self.alpha) + alpha_div_k
+        loss = -(target_probs * torch.log_softmax(logits, dim=-1)).sum(dim=-1)
+        return loss.mean()
+
+
+# bring code from https://github.com/jik0730/VAT-pytorch
 class VAT(nn.Module):
     """
     We define a function of regularization, specifically VAT.

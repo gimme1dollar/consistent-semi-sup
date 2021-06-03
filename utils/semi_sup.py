@@ -1,10 +1,19 @@
 import torch
+import torch.nn as nn
+import numpy as np
+import torch.nn.functional as F
+from torchvision import transforms
 from utils.losses import *
-import wandb
+import wandb, random
+from copy import deepcopy
 
 def semi_sup_learning(self, input_ul, label_ul):
     input_ul = self.upsampler_ul(input_ul)
+    batch = input_ul.shape[0]
     student_label = self.model(input_ul)
+
+    with torch.no_grad():
+        teacher_label = self.teacher(input_ul).detach()
 
     vat_loss = VAT(model = self.model, n_power=1, XI=1e-6, eps=3)
     lds = vat_loss(input_ul, student_label)
@@ -12,8 +21,6 @@ def semi_sup_learning(self, input_ul, label_ul):
     return lds
 
 def adv_self_training(self, input_l, teacher_output, label_l, input_ul):
-    self.sec_student.train()
-    
     input_ul = self.upsampler_ul(input_ul)
     self.optimizer2.zero_grad()
 

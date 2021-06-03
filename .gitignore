@@ -3,7 +3,10 @@ dataset/DL20/test
 dataset/DL20/train
 dataset/DL20/valid
 wandb/
+__pychache__
 checkpoints/
+*.csv
+*.pyc 
 .DS_Store
 venv/
 model/

@@ -1,14 +1,24 @@
-# POSTECH CSED538 Group12 Project
+# POSTECH CSED538 Group12 Deep Learning Project
 
-## Preparation
+## Semi-supervised Image Classification with Distillation Loop
+>>Deep learning has recently achieved state-of-the-art performance in many computer vision tasks. One of the key driving force of deep learning success is large labeled data sets, demanding additional effort for labeling. 
+However, there are still lots of unlabeled data that can help improving performance. In this manner, semi-supervised learning(SSL) can utilize partially labeled (composed of both full labeled and unlabeled) data. Here, we present simple, but effective method of semi-sup learning by **‘distillation loop’**.
+
+## performance on DL20 dataset
+
+![score](score.png)
+
+### Preparation
 First of all, I highly recommend you to use "virtualenv" or "anaconda" for managing python libraries in Ubuntu/Mac.
 
-After making your own private python environment using whatever, Please install needed python packages by following : pip install -r requirements.txt
+After making your own private python environment, Please install needed python packages
 
-You have to install proper pytorch with your own gpu version; 
+>  pip install -r requirements.txt
 
-## Dataset
-### We use DL20, which has 20 classes.
+You have to install proper pytorch package with your own gpu; 
+
+### Dataset
+#### We use DL20, which has 20 classes.
 You have to make following dataset hierarchy:
 
 ---
@@ -21,43 +31,51 @@ train - [0, 1, 2, ... , 19]
 
 valid - [0, 1, 2, ..., 19]
 
-test - only have images without labels
+test - images without label
 
 ---
-### semi-sup split 
-python split.py
+### Dataset split for making unlabeled dataset list 
+> python3 split.py
 
-dataset / DL20 / [0.1_label_path_list.txt, ... ]
+dataset / DL20 / [0.1_label_path_list.txt, 0.1_unlabel_path_list.txt, ... ],
+
+or you can use label-unlabel split path record directly from our github repo.
+
+---
+### For fully supervised baseline training
+
+> python3 main_baseline.py --ratio=1.0 
+
+---
+
+### For Semi-sup learning
+
+you can choose label : unlabel ratio = [0.5, 0.125, 0.05, 0.02]
+
+#### Stage-1 training : mean-teacher
+
+> python3 main.py --ratio=0.02 --exp-name="1_50_base"
+
+#### Stage-2 training : distillation loop
+
+> python3 main.py --ratio=0.02 --pretrained-ckpt="./checkpoints/1_50_base/best.pth" --exp-name="1_50_FINAL" --second-stage=True
+
+---
+### For validation & kaggle submission
+
+> python3 test.py --pretrained-ckpt="./checkpoints/1_50_FINAL/best.pth" --exp-name="1_50_FINAL"
+
+### Final weights for label : unlabel = 1:50
+
+https://drive.google.com/file/d/1Ln2PAfUadq6iPrbbobe5DoTBHkqYbBft/view?usp=sharing
 
 
-## Wandb
-You have to install wandb; ML recording & visualization tool.
+### Basic information about framework
+#### backbone : efficientnet-b04 
 
-how to start/use wandb : https://greeksharifa.github.io/references/2020/06/10/wandb-usage/
+### Contributors
+권동현 20212423 
 
-## For training
-python3 main.py
-
-## For base line reproduction
-download baseline weights : https://drive.google.com/file/d/158uepP38iGlZ_UKCL6PJQ39RTfbYhUcH/view?usp=sharing
-
-python3 main.py --pretrained-ckpt="./YOUR_PATH/baseline.pth"
-
-## For pseudo simclr 
-1. train model supervised manner using some labeled data (ratio: 0.125, 0.5 ...)    
-   - model weight (ratio=0.125): https://drive.google.com/file/d/1DBbRu9QtTPLEJZw3hxRqtWfAZHdKmUGl/view?usp=sharing
-2. generate pseudo label about unlabeled data with trained model (Refer 0.125_unlabel_path_list2.txt)
-   - ex) each line consist of unlabeled-datapath & pseudo-label
-3. training simclr using pseudo label: python3 z_semi_kam_run.py
-   - model weight from scratch (ratio=0.125): https://drive.google.com/file/d/1BaFniMByJL7Rn5HXLSWYK1Y3GnPIuLcc/view?usp=sharing
-4. linear evaluation: python z_semi_kam_eval.py
-   - model weight from scratch (ratio=0.125): https://drive.google.com/file/d/17AkXgDZK4Fy_s6TgRaFXm5KD985E1y5g/view?usp=sharing
-
-## Basic informations about framework
-### backbone : efficientnet-b04 
-
-## Contributorse
 감제원 20202637    
-권동현 20212423     
-김민석 20182698    
+
 이주용 20160271
