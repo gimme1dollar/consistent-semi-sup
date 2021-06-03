@@ -45,19 +45,6 @@ def init(train_batch, val_batch, test_batch, args):
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
     ])
 
-    transform_train = transforms.Compose([
-        #transforms.ToPILImage(),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomVerticalFlip(p=0.5),
-        transforms.RandomApply( [transforms.ColorJitter( brightness=(0.2, 2) )], p=0.5),
-        transforms.RandomApply([transforms.ColorJitter(  contrast=(0.3, 2)   )], p=0.5),
-        transforms.RandomApply([transforms.ColorJitter(  saturation=(0.2, 2) )], p=0.5),
-        transforms.RandomApply([transforms.ColorJitter( hue=(-0.3, 0.3))], p=0.5),
-        transforms.RandomApply([transforms.RandomRotation(90, expand=False)], p=0.5),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
-    ])
-
     transform_val = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
