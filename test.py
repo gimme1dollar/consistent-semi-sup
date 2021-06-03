@@ -264,7 +264,11 @@ def main(args):
     )
 
     trainer.val()
+<<<<<<< HEAD
     trainer.test() # must do testing after validation
+=======
+    trainer.test() # must do test after validation
+>>>>>>> fb5745ee5dd9d7e8a5c6d3a1de63fee532b8a0e0
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
